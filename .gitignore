@@ -1,0 +1,18 @@
+# Repositorio de Expedición Universo: solo los directorios funcionales.
+# Lista blanca: todo lo de la raíz se ignora salvo lo indicado.
+/*
+!/game/
+!/installer/
+!/jugar.cmd
+!/README.md
+!/.gitignore
+!/.gitattributes
+
+# Dentro del proyecto Godot
+game/.godot/
+game/exports/
+game/*.import.tmp
+**/bin/
+**/obj/
+*.apk
+*.idsig

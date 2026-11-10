@@ -1,0 +1,16 @@
+﻿EXPEDICIÓN UNIVERSO 1.0
+Exploración planetaria con IA híbrida: red neuronal (VER) + algoritmo genético (ELEGIR) + lógica difusa (AJUSTAR)
++ supervisor de seguridad. Simulación ficticia con parámetros de referencia (NASA; Tierra calibrada con GeoClick).
+
+CÓMO SE JUEGA
+- Elija cuerpo, modo, semilla y batería y pulse "Validar e iniciar misión".
+- Haga CLIC en el terreno: el rover evalúa el destino (energía de ida y regreso, riesgo, terreno, clima)
+  y navega hasta allí. Clic derecho = cancelar. Pasar el mouse = información de la celda.
+- Mayús/Ctrl/Alt + clic: agregar barranco / roca / despejar.
+- Espacio pausa · N un paso · 1-4 velocidad · M destino por clic <-> misión autónoma · Q/E girar · rueda zoom
+- F1-F11 eventos (sismo, tormenta, meteorito, fallo de sensor, noche, enlace, ráfaga, biofirma, alien,
+  batería 12 %, remoción) · Tab laboratorios (RNA, difuso, genético, políticas) · H ayuda
+- F12 exporta la traza CSV y el resultado JSON a  Documentos\Expedicion Universo
+- Alt+Enter pantalla completa · R vuelve a la configuración
+
+REQUISITOS: Windows 10/11 de 64 bits con Vulkan, Direct3D 12 o OpenGL 3.3. No necesita instalar .NET (va incluido).

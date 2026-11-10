@@ -1,0 +1,11 @@
+<Project Sdk="Godot.NET.Sdk/4.7.2">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <!-- Las plantillas de Android de Godot 4.7 requieren net9.0 (solo para la exportación a Android) -->
+    <TargetFramework Condition=" '$(GodotTargetPlatform)' == 'android' ">net9.0</TargetFramework>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <Nullable>enable</Nullable>
+    <RootNamespace>AresX</RootNamespace>
+    <LangVersion>12</LangVersion>
+  </PropertyGroup>
+</Project>
