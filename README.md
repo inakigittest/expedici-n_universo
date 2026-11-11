@@ -103,6 +103,23 @@ se decodifican y se remuestrean a una grilla cuadrada de celdas de 30 m (la reso
 - Datos: Copernicus DEM GLO-30 © DLR/Airbus (ESA), ESA WorldCover 2021 (CC BY 4.0), Sentinel-2 (Copernicus) y ERA5
   (Copernicus/ECMWF), obtenidos a través de los informes GeoClick.
 
+### Importar un informe PDF dentro del juego (Windows)
+
+En la configuración, con la Tierra elegida, el botón **Importar PDF…** junto a "Terreno (Tierra)" abre un selector de
+archivos. También se puede **arrastrar el PDF a la ventana**.
+
+- El juego lee el informe y genera el escenario en menos de 2 s, con el mismo proceso descrito arriba: figuras,
+  coordenadas o barra de escala, y tablas.
+- El lector de PDF es PdfPig (Apache 2.0).
+- El escenario queda en la carpeta de datos del juego (`escenarios/`) y aparece en la lista marcado como *importado*.
+  Si tiene el mismo número de consulta que uno incluido, lo reemplaza.
+- Al terminar muestra una **validación**: área reconstruida frente a la del informe, pendiente mediana calculada frente
+  a la del informe, capas encontradas y si la escala salió de coordenadas o de la barra de escala. Si el área difiere
+  más de 15 %, lo advierte.
+- Reconoce los dos formatos de informe conocidos: con coordenadas y el antiguo con barra de escala. Con los 8
+  informes, el área quedó a menos de 1,3 % de la del informe y las tablas coinciden con el conversor original.
+- En Android todavía no está disponible (falta probar el selector de archivos en el teléfono).
+
 ## Helicóptero no tripulado (solo Tierra)
 
 - Modelo de potencia por teoría de cantidad de movimiento: el vuelo estacionario necesita (m g)^1,5 / √(2 ρ A) / FM
@@ -182,7 +199,7 @@ se decodifican y se remuestrean a una grilla cuadrada de celdas de 30 m (la reso
 
 | Carpeta | Contenido |
 |---|---|
-| `game/scripts/core/` | `Rng` (SplitMix64 determinista), ruido fBm, `Cell`; `Scenarios` (catálogo de escenarios GeoClick); `HeadlessRunner` (`--selftest`, `--benchmark`, `--diag [--scenario=id] [--heli]`) |
+| `game/scripts/core/` | `Rng` (SplitMix64 determinista), ruido fBm, `Cell`; `Scenarios` (catálogo de escenarios GeoClick incluidos e importados); `GeoClickPdf` (importador de informes PDF); `HeadlessRunner` (`--selftest`, `--benchmark`, `--diag [--scenario=id] [--heli]`) |
 | `game/scripts/sim/` | `PlanetProfile` (8 cuerpos), `GeoReport` (datos de un informe GeoClick), `WorldMap` (40×40 celdas de 5 m o escenario a escala de 30 m), `SimEnvironment` (reloj, viento OU, lluvia, polvo, sismos, eventos), `Sensors` (`RoverState`, `SensorSuite`, validación), `Mission` (ciclo por paso, estados, física, ablaciones, eventos, CSV/JSON), `Drone` (dron explorador), `Helicopter` (modelo de potencia y vuelo), `Benchmark` |
 | `game/scripts/ai/` | `NeuralNet` (MLP 11→32→16→3 desde cero, Adam, métricas), `Perception` (modelo de rasgos, dataset por mapas, `BeliefMap`), `Fuzzy` (Mamdani genérico + 6 entradas / 2 salidas / 16 reglas), `Planning` (`RouteGA` de puntos de paso, `MissionGA` viajero+mochila, `CostModel`), `Supervisor` (S-01…S-13 y H-01…H-04 de vuelo) |
 | `game/scripts/view/` | terreno (procedural o satelital), objetos, capas (rutas, creencias, marcadores), robot (MechRig) y helicóptero, dron, cámara, cielo y partículas |

@@ -216,6 +216,8 @@ public partial class Main : Node3D, IGameHost
             else if (_shotPath != null) _shotWait = 30;
             foreach (var a in _args)
                 if (a.StartsWith("--config-scenario=")) _config.SelectScenario(a[18..]);
+            foreach (var a in _args)
+                if (a.StartsWith("--config-import=")) { _config.ImportForTest(a[16..]); _shotWait = 900; }
         }
         if (_mission == null || _robot == null) { HandleShot(); return; }
         if (_overlay != null) _overlay.RobotPos = _robot.GlobalPosition;

@@ -45,6 +45,31 @@ public static class HeadlessRunner
             exitCode = same ? 0 : 1;
             return true;
         }
+        if (args.FirstOrDefault(a => a.StartsWith("--import-pdf=")) is string ip)
+        {
+            // importa uno o varios PDF (separados por ;) y compara con el escenario incluido del mismo informe, si existe
+            foreach (var path in ip[13..].Split(';'))
+            {
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                var r = GeoClickPdf.Import(path);
+                GD.Print($"[Importar] {System.IO.Path.GetFileName(path)} · {sw.ElapsedMilliseconds} ms · {r.Summary}");
+                if (!r.Ok) { exitCode = 1; continue; }
+                var mine = GeoReport.FromJson(Godot.FileAccess.GetFileAsString(r.JsonPath));
+                string refPath = Scenarios.Dir + r.Id + ".json";
+                if (!Godot.FileAccess.FileExists(refPath)) continue;
+                var py = GeoReport.FromJson(Godot.FileAccess.GetFileAsString(refPath));
+                float de = 0;
+                int cmpN = Math.Min(mine.N, py.N);
+                for (int y = 0; y < cmpN; y++) for (int x = 0; x < cmpN; x++) de += Math.Abs(mine.Elev![y * mine.N + x] - py.Elev![y * py.N + x]);
+                int coverSame = 0, coverTot = 0;
+                for (int i = 0; i < Math.Min(mine.CoverGrid!.Length, py.CoverGrid!.Length); i++) { if (py.CoverGrid[i] != 255 || mine.CoverGrid[i] != 255) { coverTot++; if (py.CoverGrid[i] == mine.CoverGrid[i]) coverSame++; } }
+                GD.Print($"[Importar]   vs conversor Python: N {mine.N}/{py.N} · |Δelev| medio {de / (cmpN * cmpN):0.0} m · cobertura igual {coverSame * 100f / Math.Max(1, coverTot):0.0} % · " +
+                         $"lluvia mensual {(mine.MonthlyRainMm.SequenceEqual(py.MonthlyRainMm) ? "igual" : "DISTINTA")} · T mensual {(mine.MonthlyTempC.Zip(py.MonthlyTempC).All(t => Math.Abs(t.First - t.Second) < 0.15f) ? "igual" : "DISTINTA")} · " +
+                         $"retorno {(mine.ReturnPeriods.SequenceEqual(py.ReturnPeriods) ? "igual" : "DISTINTO")} · pendientes {(mine.SlopeBins.Zip(py.SlopeBins).All(t => Math.Abs(t.First - t.Second) < 0.001f) ? "igual" : "DISTINTAS")} · " +
+                         $"cobertura km² {(mine.Cover.Count == py.Cover.Count && mine.Cover.All(kv => py.Cover.TryGetValue(kv.Key, out var v) && Math.Abs(v - kv.Value) < 0.01f) ? "igual" : "DISTINTA")} · lat {mine.Lat:0.0000}/{py.Lat:0.0000} · elev {mine.ElevMin}-{mine.ElevMax}");
+            }
+            return true;
+        }
         string? diag = args.FirstOrDefault(a => a.StartsWith("--diag="));
         if (diag != null)
         {
@@ -237,6 +262,24 @@ public static class HeadlessRunner
         Check($"Escenarios GeoClick a escala ({Scenarios.All.Count})", Scenarios.All.Count > 0 && scOk == Scenarios.All.Count, string.Join(" · ", scDetail));
         var sm = new Mission(new MissionConfig { Mode = MissionMode.Autonomo, PlanetId = "tierra", Seed = 7, MaxSteps = 120, Scenario = Scenarios.Load("40e9efb1") }, rna);
         while (!sm.Finished) sm.Step();
+        // importador de PDF (solo si el informe de referencia está en el equipo: no se versiona)
+        string refPdf = ProjectSettings.GlobalizePath("res://").TrimEnd('/') + "/../referencia/geoclick_40e9efb1.pdf";
+        if (File.Exists(refPdf))
+        {
+            bool had = Godot.FileAccess.FileExists(GeoClickPdf.UserDir + "40e9efb1.json");
+            var imp = GeoClickPdf.Import(refPdf);
+            var g = imp.Ok ? GeoReport.FromJson(Godot.FileAccess.GetFileAsString(imp.JsonPath)) : null;
+            var imap = g != null ? new WorldMap(PlanetProfile.Get("tierra"), g, 7, 1) : null;
+            Check("Importar informe PDF dentro del juego", imp.Ok && Math.Abs(imp.AreaRebuiltKm2 / imp.AreaReportKm2 - 1) < 0.03f && imap!.Sites.Count >= 4 && g!.MonthlyRainMm[5] > 100,
+                imp.Summary);
+            if (!had)
+            {
+                DirAccess.RemoveAbsolute(ProjectSettings.GlobalizePath(GeoClickPdf.UserDir + "40e9efb1.json"));
+                DirAccess.RemoveAbsolute(ProjectSettings.GlobalizePath(GeoClickPdf.UserDir + "40e9efb1_sat.jpg"));
+            }
+        }
+        else GD.Print("[SelfTest] (omitido) importar PDF: referencia/geoclick_40e9efb1.pdf no está en este equipo");
+
         // helicóptero: solo Tierra, potencia según densidad del aire, misión completa en un escenario a escala
         Check("Helicóptero bloqueado fuera de la Tierra", new MissionConfig { PlanetId = "marte", Heli = true }.Validate() != null);
         float mSea = HeliModel.Margin(HeliModel.Density(1.01325f, 15f)), mHigh = HeliModel.Margin(HeliModel.Density(1.01325f * MathF.Exp(-2.6f / 8.5f), 25f));

@@ -13,7 +13,11 @@ public partial class ConfigScreen : CanvasLayer
     public MissionConfig Config = new();
 
     private OptionButton _planet = null!, _mode = null!, _diff = null!, _month = null!, _control = null!, _terrain = null!;
-    private Label _terrainLabel = null!;
+    private Label _terrainLabel = null!, _importMsg = null!;
+    private HBoxContainer _terrainRow = null!;
+    private Button? _importBtn;
+    private FileDialog? _pdfDialog;
+    private System.Threading.Tasks.Task<Core.GeoImportResult>? _importTask;
     private SpinBox _seed = null!;
     private HSlider _battery = null!, _science = null!;
     private Label _batteryVal = null!, _scienceVal = null!, _validation = null!;
@@ -68,10 +72,18 @@ public partial class ConfigScreen : CanvasLayer
         _mode.ItemSelected += _ => Refresh();
         Row("Modo", _mode);
         _terrain = new OptionButton { ClipText = true, TooltipText = "Escenarios a escala real convertidos desde informes GeoClick (DEM GLO-30 30 m, ESA WorldCover, Sentinel-2, ERA5)" };
-        _terrain.AddItem("Procedural 200 m (calibrado con GeoClick 40e9efb1)");
-        foreach (var g in Core.Scenarios.All) _terrain.AddItem($"GeoClick {g.Title}");
+        _terrain.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        FillTerrain();
         _terrain.ItemSelected += _ => { FillMonths(); Refresh(); };
-        Row("Terreno (Tierra)", _terrain);
+        _terrainRow = new HBoxContainer();
+        _terrainRow.AddThemeConstantOverride("separation", 4);
+        _terrainRow.AddChild(_terrain);
+        if (!Core.Platform.IsMobile)
+        {
+            _importBtn = UiTheme.Button("Importar PDF…", OpenPdfDialog, "Convertir un informe PDF de GeoClick en un escenario a escala real (también puede arrastrar el PDF a la ventana)");
+            _terrainRow.AddChild(_importBtn);
+        }
+        Row("Terreno (Tierra)", _terrainRow);
         _terrainLabel = (Label)form.GetChild(form.GetChildCount() - 2);
         _diff = new OptionButton();
         _diff.AddItem("Fácil (pocos obstáculos, 4 sitios)");
@@ -113,6 +125,11 @@ public partial class ConfigScreen : CanvasLayer
         _train = new RichTextLabel { BbcodeEnabled = true, CustomMinimumSize = new Vector2(0, 120), ScrollFollowing = true };
         right.AddChild(_train);
 
+        _importMsg = UiTheme.Label("", 11, UiTheme.Ok);
+        _importMsg.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+        _importMsg.Visible = false;
+        outer.AddChild(_importMsg);
+        if (!Core.Platform.IsMobile) GetWindow().FilesDropped += OnFilesDropped;
         _validation = UiTheme.Label("", 12, UiTheme.Crit);
         _validation.AutowrapMode = TextServer.AutowrapMode.WordSmart;
         outer.AddChild(_validation);
@@ -129,6 +146,64 @@ public partial class ConfigScreen : CanvasLayer
         bottom.AddChild(_startBtn);
         outer.AddChild(bottom);
         Refresh();
+    }
+
+    private void FillTerrain()
+    {
+        _terrain.Clear();
+        _terrain.AddItem("Procedural 200 m (calibrado con GeoClick 40e9efb1)");
+        foreach (var g in Core.Scenarios.All) _terrain.AddItem($"GeoClick {g.Title}{(Core.Scenarios.IsImported(g.Id) ? " · importado" : "")}");
+    }
+
+    // ------------------------------------------------------------------ importar un informe PDF
+    private void OpenPdfDialog()
+    {
+        if (_pdfDialog == null)
+        {
+            _pdfDialog = new FileDialog
+            {
+                FileMode = FileDialog.FileModeEnum.OpenFile, Access = FileDialog.AccessEnum.Filesystem, UseNativeDialog = true,
+                Title = "Informe GeoClick (PDF)", Filters = new[] { "*.pdf ; Informe GeoClick (PDF)" },
+                CurrentDir = System.Environment.GetFolderPath(System.Environment.SpecialFolder.UserProfile) + "/Downloads",
+            };
+            _pdfDialog.FileSelected += StartImport;
+            AddChild(_pdfDialog);
+        }
+        _pdfDialog.PopupCentered(new Vector2I(900, 560));
+    }
+
+    private void OnFilesDropped(string[] files)
+    {
+        if (!_root.Visible) return;
+        var pdf = files.FirstOrDefault(f => f.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase));
+        if (pdf != null) StartImport(pdf);
+    }
+
+    /// <summary>Captura automática: importa como si el usuario hubiera elegido el archivo.</summary>
+    public void ImportForTest(string path) => StartImport(path);
+
+    private void StartImport(string path)
+    {
+        if (_importTask != null) return;
+        _importMsg.Visible = true;
+        _importMsg.AddThemeColorOverride("font_color", UiTheme.Accent);
+        _importMsg.Text = $"Importando {System.IO.Path.GetFileName(path)}: leyendo figuras, coordenadas y tablas del informe…";
+        if (_importBtn != null) _importBtn.Disabled = true;
+        _importTask = System.Threading.Tasks.Task.Run(() => Core.GeoClickPdf.Import(path));
+    }
+
+    public override void _Process(double delta)
+    {
+        if (_importTask == null || !_importTask.IsCompleted) return;
+        var r = _importTask.Result;
+        _importTask = null;
+        if (_importBtn != null) _importBtn.Disabled = false;
+        _importMsg.AddThemeColorOverride("font_color", r.Ok ? (r.Notes.Count > 0 ? UiTheme.Warn : UiTheme.Ok) : UiTheme.Crit);
+        _importMsg.Text = (r.Ok ? "✓ " : "✗ ") + r.Summary;
+        if (!r.Ok) return;
+        Core.Scenarios.Refresh();
+        FillTerrain();
+        SelectScenario(r.Id);
     }
 
     private GeoReport? SelectedScenario => _terrain.Selected > 0 && _terrain.Selected - 1 < Core.Scenarios.All.Count ? Core.Scenarios.All[_terrain.Selected - 1] : null;
@@ -223,7 +298,7 @@ public partial class ConfigScreen : CanvasLayer
             ? $"O₂ {p.O2Pct:0.###} % · CO₂ {p.CO2Pct:0.###} % · N₂ {p.N2Pct:0.#} % · SO₂ {p.SO2Ppm:0} ppm"
             : $"H₂ {p.H2Pct:0.#} % · He {p.HePct:0.#} % · CH₄ {p.CH4Pct:0.#} %";
         bool earthRover = p.Style == TerrainStyle.Tierra && _mode.Selected != 1;
-        _terrain.Visible = _terrainLabel.Visible = earthRover;
+        _terrainRow.Visible = _terrainLabel.Visible = earthRover;
         var geo = Geo;
         var sc = earthRover ? SelectedScenario : null;
         string earth = p.Style != TerrainStyle.Tierra ? "" :

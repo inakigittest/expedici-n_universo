@@ -8,4 +8,8 @@
     <RootNamespace>AresX</RootNamespace>
     <LangVersion>12</LangVersion>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- Lector de PDF (Apache 2.0): importar informes GeoClick como escenarios dentro del juego -->
+    <PackageReference Include="PdfPig" Version="0.1.9" />
+  </ItemGroup>
 </Project>
