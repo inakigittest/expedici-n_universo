@@ -25,12 +25,15 @@ public sealed class RoverState
     public float LastSpeed;
     public int Collisions, Slips;
     public bool Probe;
+    public bool Heli;                       // helicóptero (solo Tierra)
+    public float HeliRho, HeliMargin, HeliAglM, HeliPowerW;
 
     public float BatteryPct => CapacityWh <= 0 ? 0 : 100f * BatteryWh / CapacityWh;
-    public float TrueX => (Pos.X + 0.5f) * WorldMap.CellM;
-    public float TrueY => (Pos.Y + 0.5f) * WorldMap.CellM;
+    public float CellM = WorldMap.RefCellM;   // tamaño de celda del mapa (m)
+    public float TrueX => (Pos.X + 0.5f) * CellM;
+    public float TrueY => (Pos.Y + 0.5f) * CellM;
     public float PosErrorM => MathF.Sqrt((EstX - TrueX) * (EstX - TrueX) + (EstY - TrueY) * (EstY - TrueY));
-    public Cell EstCell => new((int)MathF.Floor(EstX / WorldMap.CellM), (int)MathF.Floor(EstY / WorldMap.CellM));
+    public Cell EstCell => new((int)MathF.Floor(EstX / CellM), (int)MathF.Floor(EstY / CellM));
     public float HeadingDeg => Cell.Heading(Dir);
 }
 
@@ -101,7 +104,7 @@ public sealed class SensorSuite
     public static float RayDistance(WorldMap map, Cell from, Cell d, out TerrainClass hit)
     {
         hit = TerrainClass.Libre;
-        float stepM = d.IsDiagonal ? WorldMap.CellM * 1.41421f : WorldMap.CellM;
+        float stepM = d.IsDiagonal ? map.CellM * 1.41421f : map.CellM;
         for (int k = 1; k <= 4; k++)
         {
             var c = new Cell(from.X + d.X * k, from.Y + d.Y * k);
@@ -167,7 +170,7 @@ public sealed class SensorSuite
         C("gust", "Ráfaga", "Atmósfera", "m/s", env.WindGust, 0.4f, 0, 900).With(-1, p.WindLimit * 0.7f, -1, p.WindLimit * 1.1f).Applicable = !airless;
         C("wind_dir", "Dirección viento", "Atmósfera", "°", env.WindDirDeg, 3f, 0, 360, "0").Applicable = !airless;
         C("rain", "Lluvia (pluviómetro)", "Atmósfera", "mm/h", env.RainMmH, 0.05f, 0, 200).With(-1, 8, -1, 25).Applicable = p.HasRain;
-        C("rain24", "Lluvia 24 h equiv.", "Atmósfera", "mm", env.Rain24h, 0.2f, 0, 400).With(-1, 49.2f, -1, 80.1f).Applicable = p.HasRain;
+        C("rain24", "Lluvia 24 h equiv.", "Atmósfera", "mm", env.Rain24h, 0.2f, 0, 400).With(-1, map.Geo.RainT(2), -1, map.Geo.RainT(10)).Applicable = p.HasRain;
         C("soil_h", "Humedad del suelo", "Atmósfera", "%", env.SoilMoisture * 100, 1f, 0, 100, "0").With(-1, 60, -1, 85).Applicable = p.HasRain;
         C("vis", "Visibilidad", "Atmósfera", "m", vis, vis * 0.03f, 0, 25000, "0").With(800, 1e9f, 150, 1e9f);
         C("part", "Partículas / opacidad", "Atmósfera", "", env.Particles, 0.01f, 0, 1, "0.00").With(-1, 0.45f, -1, 0.75f);
@@ -178,12 +181,21 @@ public sealed class SensorSuite
         float roll = (map.DirSlope(pos, map.Clamp(pos + right)) - map.DirSlope(pos, map.Clamp(pos + left))) / 2f;
         C("incl_pitch", "Inclinómetro cabeceo", "Terreno", "°", pitch, 0.3f, -45, 45).With(-20, 20, -WorldMap.MaxSlopeDeg, WorldMap.MaxSlopeDeg).CriticalNav = true;
         C("incl_roll", "Inclinómetro alabeo", "Terreno", "°", roll, 0.3f, -45, 45).With(-15, 15, -25, 25);
-        float drop = map.Height(pos) - map.Height(ahead);
+        float drop = (map.Height(pos) - map.Height(ahead)) * map.DropScale;   // equivalente sobre 5 m
         C("lidar_drop", probe ? "Cizalla vertical (sonda)" : "LIDAR borde (caída)", "Terreno", "m", drop, 0.08f, -30, 30).With(-1e9f, 2.5f, -1e9f, WorldMap.CliffDropM).CriticalNav = true;
-        float grad = (map.Height(map.Clamp(pos + new Cell(heading.X * 2, heading.Y * 2))) - map.Height(pos)) / (WorldMap.CellM * 2 * (heading.IsDiagonal ? 1.414f : 1));
+        float grad = (map.Height(map.Clamp(pos + new Cell(heading.X * 2, heading.Y * 2))) - map.Height(pos)) / (map.CellM * 2 * (heading.IsDiagonal ? 1.414f : 1));
         C("lidar_grad", "LIDAR gradiente", "Terreno", "m/m", grad, 0.02f, -5, 5, "0.00");
         C("alt", probe ? "Altitud sobre 1 bar" : "Altímetro", "Terreno", "m", probe ? map.Height(pos) * 40 : map.Elevation(pos), 0.3f, -1e5f, 1e5f, "0");
         C("rough", "Rugosidad (textura)", "Terreno", "", map.Rough[map.Idx(pos)], 0.03f, 0, 1, "0.00").With(-1, 0.6f, -1, 0.85f);
+
+        // ---- vuelo (helicóptero)
+        if (r.Heli)
+        {
+            C("h_agl", "Altura sobre el terreno (radar)", "Vuelo", "m", r.HeliAglM, 0.5f, 0, 500, "0");
+            C("h_rho", "Densidad del aire", "Vuelo", "kg/m³", r.HeliRho, 0.002f, 0, 2, "0.000").With(0.95f, 9, 0.8f, 9);
+            C("h_pow", "Potencia del rotor", "Vuelo", "kW", r.HeliPowerW / 1000f, 0.2f, 0, 100, "0.0");
+            C("h_margin", "Margen de potencia (disp./estac.)", "Vuelo", "", r.HeliMargin, 0.01f, 0, 5, "0.00").With(1.12f, 99, 1.0f, 99);
+        }
 
         // ---- proximidad
         float pf = RayDistance(map, pos, heading, out _), pl = RayDistance(map, pos, left, out _), pr = RayDistance(map, pos, right, out _);

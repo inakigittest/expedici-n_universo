@@ -13,7 +13,7 @@ public partial class TelemetryPanel : Control
 {
     public Mission? Mission;
     private const int Row = 15;
-    private static readonly string[] GroupOrder = { "Energía", "Térmico", "Atmósfera", "Terreno", "Proximidad", "Dinámica", "Radiación", "Cámara", "Navegación", "Sistema" };
+    private static readonly string[] GroupOrder = { "Energía", "Vuelo", "Térmico", "Atmósfera", "Terreno", "Proximidad", "Dinámica", "Radiación", "Cámara", "Navegación", "Sistema" };
 
     public override void _Process(double delta) => QueueRedraw();
 
@@ -60,7 +60,7 @@ public partial class TelemetryPanel : Control
         if (m.Planet.HasRain)
         {
             float li = m.Env.LandslideIndex(r.Pos);
-            Derived("Índice de remoción (celda)", $"{li:0.00}" + (m.Env.Rain24h > 0 ? $" · retorno ≈{GeoClick.ReturnYears(m.Env.Rain24h):0.0} años" : ""), y, w, li > 0.5f ? UiTheme.Crit : li > 0.25f ? UiTheme.Warn : UiTheme.Text);
+            Derived("Índice de remoción (celda)", $"{li:0.00}" + (m.Env.Rain24h > 0 ? $" · retorno ≈{m.Map.Geo.ReturnYears(m.Env.Rain24h):0.0} años" : ""), y, w, li > 0.5f ? UiTheme.Crit : li > 0.25f ? UiTheme.Warn : UiTheme.Text);
             y += Row;
         }
         Derived("Latencia de órdenes (sim.)", m.Env.CommandDelaySteps == 0 ? "inmediata" : $"{m.Env.CommandDelaySteps} pasos" + (m.PendingDestination != null ? " · DESTINO EN TRÁNSITO" : ""), y, w,
@@ -109,7 +109,8 @@ public partial class DecisionPanel : Control
         y = DrawRna(m, w, y) + 6;
         y = DrawFuzzy(m, w, y) + 6;
         y = DrawGa(m, w, y) + 6;
-        y = DrawSupervisor(m, w, y);
+        y = DrawSupervisor(m, w, y) + 6;
+        y = DrawDrone(m, w, y);
         CustomMinimumSize = new Vector2(0, y + 4);
     }
 
@@ -132,7 +133,7 @@ public partial class DecisionPanel : Control
         (string, string, Color)[] rows =
         {
             ("Distancia recta / ruta est.", $"{r.StraightM:0} m / {r.PathM:0} m ({r.Steps} pasos)", UiTheme.Text),
-            ("Restante en la ruta vigente", $"{left} pasos · {left * WorldMap.CellM:0} m", UiTheme.Accent),
+            ("Restante en la ruta vigente", $"{left} pasos · {left * m.Map.CellM:0} m", UiTheme.Accent),
             ("Energía ida (+25 %) / regreso", $"{r.EnergyWh:0.0} Wh / {ret}", r.Verdict is DestVerdict.EnergiaInsuficiente or DestVerdict.SoloIda ? UiTheme.Crit : UiTheme.Text),
             ("Batería al llegar / tras volver", $"{r.BatteryAtArrivalPct:0} % / {(float.IsFinite(r.BatteryAfterReturnPct) ? r.BatteryAfterReturnPct.ToString("0") + " %" : "—")}", r.BatteryAfterReturnPct < 10 ? UiTheme.Warn : UiTheme.Text),
             ("Tiempo estimado (ETA)", $"{r.EtaS / 60:0.0} min de misión", UiTheme.Text),
@@ -154,16 +155,85 @@ public partial class DecisionPanel : Control
         return y;
     }
 
+    private float DrawDrone(Mission m, float w, float y)
+    {
+        var d = m.Drone;
+        var head = new Color("3ec8ff");
+        Gfx.Header(this, new Vector2(0, y), w, "DRON EXPLORADOR · reconocimiento aéreo", head);
+        y += 18;
+        if (!d.Available)
+        {
+            Gfx.Text(this, new Vector2(4, y), "No disponible: " + d.Unavailable, 11, UiTheme.Dim, w - 8);
+            return y + 14;
+        }
+        var mc = d.Mode switch { DroneMode.Acoplado => UiTheme.Dim, DroneMode.Escaneando => head, DroneMode.Regresando => UiTheme.Warn, _ => UiTheme.Ok };
+        string mode = DroneState.ModeName(d.Mode).ToUpperInvariant();
+        Gfx.Chip(this, new Vector2(4, y), mode, 11, mc, true);
+        string extra = d.Mode switch
+        {
+            DroneMode.Escaneando => $"barrido {d.ScanLeftS:0} s restantes · radio {d.ScanRadius * m.Map.CellM:0} m",
+            DroneMode.Acoplado => d.Auto ? "despliegue automático (difuso)" : "despliegue manual (tecla D)",
+            _ => $"→ {d.Target} · ({d.X:0.0}, {d.Y:0.0})",
+        };
+        Gfx.Text(this, new Vector2(Gfx.ChipWidth(mode, 11) + 10, y + 1), extra, 10, UiTheme.Text, w - Gfx.ChipWidth(mode, 11) - 14);
+        y += 18;
+        Gfx.Text(this, new Vector2(4, y), "Batería", 10, UiTheme.Dim);
+        Gfx.Bar(this, new Rect2(76, y + 3, w - 130, 8), d.BatteryPct / 100f, d.BatteryPct < 40 ? UiTheme.Warn : UiTheme.Ok);
+        Gfx.Text(this, new Vector2(0, y), $"{d.BatteryPct:0} %", 10, Colors.White, w - 4, HorizontalAlignment.Right);
+        y += 13;
+        Gfx.Text(this, new Vector2(4, y), "Conveniencia", 10, UiTheme.Dim);
+        Gfx.Bar(this, new Rect2(76, y + 3, w - 130, 8), d.Convenience, d.Convenience >= 0.6f ? head : UiTheme.Dim);
+        DrawLine(new Vector2(76 + (w - 130) * 0.6f, y + 1), new Vector2(76 + (w - 130) * 0.6f, y + 13), Colors.White, 1);
+        Gfx.Text(this, new Vector2(0, y), $"{d.Convenience:0.00}", 10, Colors.White, w - 4, HorizontalAlignment.Right);
+        y += 13;
+        if (d.LastFuzzy is { } fz)
+        {
+            string inp = string.Join(" · ", fz.Inputs.Select(kv => $"{kv.Key} {kv.Value:0.##}"));
+            Gfx.Text(this, new Vector2(4, y), inp, 9, UiTheme.Dim, w - 8);
+            y += 12;
+            foreach (var (rule, st) in fz.Fired.OrderByDescending(f => f.Strength).Take(2))
+            {
+                if (st <= 0.01f) continue;
+                Gfx.Text(this, new Vector2(4, y), $"{rule.Id} ({st:0.00}) {rule.Text}", 9, head.Lightened(0.3f), w - 8);
+                y += 12;
+            }
+        }
+        bool can = m.DroneCanDeploy(out var why);
+        if (!can && !d.Flying)
+        {
+            Gfx.Text(this, new Vector2(4, y), "Restricción: " + why, 10, UiTheme.Warn, w - 8);
+            y += 12;
+        }
+        if (d.LastDecision.Length > 0)
+        {
+            Gfx.Text(this, new Vector2(4, y), d.LastDecision, 10, UiTheme.Text, w - 8);
+            y += 12;
+        }
+        Gfx.Text(this, new Vector2(4, y), $"Despliegues {d.Deployments} · celdas analizadas {d.CellsScanned} · objetivos generados {d.ObjectivesFound}", 10, UiTheme.Dim, w - 8);
+        y += 12;
+        if (d.LastScan is { } sc)
+        {
+            Gfx.Text(this, new Vector2(4, y), $"Último barrido {sc.Center}: " + sc.Summary, 9, UiTheme.Text, w - 8);
+            y += 12;
+            if (sc.NewSite != null)
+            {
+                Gfx.Text(this, new Vector2(4, y), "★ Nuevo objetivo: " + sc.NewSite, 10, new Color("ffb347"), w - 8);
+                y += 12;
+            }
+        }
+        return y;
+    }
+
     private float DrawRna(Mission m, float w, float y)
     {
-        Gfx.Header(this, new Vector2(0, y), w, m.UseRna ? "RNA · PERCEPCIÓN (VER)  11→32→16→3" : "PERCEPCIÓN SIN RNA (regla de umbrales · ablación)", UiTheme.Rna);
+        Gfx.Header(this, new Vector2(0, y), w, (m.UseRna ? "RNA · PERCEPCIÓN (VER)  11→32→16→3" : "PERCEPCIÓN SIN RNA (regla de umbrales · ablación)") + (m.Heli ? " · zona de aterrizaje" : ""), UiTheme.Rna);
         y += 18;
         if (m.FrontCell is not Cell f)
         {
             Gfx.Text(this, new Vector2(4, y), "Sin celda propuesta en este paso (observación/espera)", 11, UiTheme.Dim);
             return y + 14;
         }
-        var names = m.Map.ProbeMode ? NeuralPerception.ProbeClassNames : NeuralPerception.ClassNames;
+        var names = m.Map.ProbeMode ? NeuralPerception.ProbeClassNames : m.Heli ? new[] { "apta", "obstruida", "escarpada" } : NeuralPerception.ClassNames;
         var p = m.FrontProbs;
         int k = Array.IndexOf(p, p.Max());
         Gfx.Text(this, new Vector2(4, y), $"Celda {f} → {names[k].ToUpperInvariant()}", 12, k == 0 ? UiTheme.Ok : UiTheme.Crit);
@@ -363,6 +433,82 @@ public partial class MiniMap : Control
         }
     }
 
+    private ImageTexture? _tex;
+    private byte[]? _px;
+    private int _texVersion = -1, _texMapVersion = -1;
+    private bool _texTruth;
+    private Texture2D? _sat;
+    private string _satId = "";
+
+    /// <summary>
+    /// Mapas a escala real: la base del mapa 2D es una textura de N×N píxeles (se regenera solo cuando cambia la
+    /// creencia); en modo verdad, la imagen Sentinel-2 del informe con los peligros encima.
+    /// </summary>
+    private void DrawLargeBase(Mission m, float minH, float maxH, float cp)
+    {
+        var map = m.Map;
+        var b = m.Belief;
+        int n = map.N;
+        if (map.IsScenario && _satId != map.Geo.Id)
+        {
+            _sat = Core.Scenarios.Satellite(map.Geo);
+            _satId = map.Geo.Id;
+        }
+        if (_tex == null || _px == null || _px.Length != n * n * 4 || b.Version != _texVersion || map.Version != _texMapVersion || Truth != _texTruth)
+        {
+            _texVersion = b.Version;
+            _texMapVersion = map.Version;
+            _texTruth = Truth;
+            _px ??= new byte[n * n * 4];
+            if (_px.Length != n * n * 4) _px = new byte[n * n * 4];
+            for (int i = 0; i < n * n; i++)
+            {
+                var c = new Cell(i % n, i / n);
+                float hn = MathX.InvLerp(minH, maxH, map.H[i]);
+                Color col;
+                if (!map.InBounds(c)) col = new Color(0.05f, 0.06f, 0.08f, Truth && _sat != null ? 0.55f : 1f);
+                else if (Truth)
+                {
+                    col = _sat != null ? new Color(0, 0, 0, 0) : View.Palette.Soil(map.Soils[i], map.Planet.Style).Darkened(0.35f - hn * 0.3f);
+                    var cls = map.ClassAt(c);
+                    if (cls == TerrainClass.Obstaculo && map.Hazards[i] != Hazard.Water) col = new Color(1f, 0.6f, 0.23f, 0.75f);
+                    if (cls == TerrainClass.Barranco) col = new Color(0.55f, 0.04f, 0.04f, 0.85f);
+                }
+                else
+                {
+                    col = new Color(0.16f + hn * 0.18f, 0.18f + hn * 0.18f, 0.22f + hn * 0.18f);
+                    if (b.Observed[i])
+                    {
+                        float r = b.Risk(c);
+                        col = new Color(0.25f + hn * 0.2f, 0.32f + hn * 0.2f, 0.3f + hn * 0.15f).Lerp(new Color("ff6a2a"), Mathf.Clamp(r * 1.2f, 0, 1));
+                    }
+                    if (map.Hazards[i] == Hazard.Water && b.ConfirmedObstacle[i]) col = new Color("2a5a9a");
+                    else if (b.ConfirmedObstacle[i]) col = new Color("ff9a3a");
+                    if (b.ConfirmedCliff[i]) col = new Color("c01818");
+                    if (b.Vetoed[i]) col = new Color("c040c0");
+                }
+                _px[i * 4] = (byte)(col.R * 255);
+                _px[i * 4 + 1] = (byte)(col.G * 255);
+                _px[i * 4 + 2] = (byte)(col.B * 255);
+                _px[i * 4 + 3] = (byte)(col.A * 255);
+            }
+            var img = Image.CreateFromData(n, n, false, Image.Format.Rgba8, _px);
+            if (_tex == null || _tex.GetWidth() != n) _tex = ImageTexture.CreateFromImage(img);
+            else _tex.Update(img);
+        }
+        var rect = new Rect2(0, 0, n * cp, n * cp);
+        if (Truth && _sat != null) DrawTextureRect(_sat, rect, false);
+        DrawTextureRect(_tex, rect, false);
+        // escala gráfica (km reales)
+        float km = n * map.CellM / 1000f;
+        float barKm = km > 6 ? 2 : km > 3 ? 1 : 0.5f;
+        float barPx = barKm * 1000f / map.CellM * cp;
+        var p0 = new Vector2(n * cp - barPx - 6, 6);
+        DrawRect(new Rect2(p0 - new Vector2(3, 2), new Vector2(barPx + 6, 16)), new Color(0, 0, 0, 0.55f));
+        DrawLine(p0 + new Vector2(0, 10), p0 + new Vector2(barPx, 10), Colors.White, 2);
+        Gfx.Text(this, p0 + new Vector2(0, -1), $"{barKm:0.#} km", 9, Colors.White);
+    }
+
     public override void _Draw()
     {
         var m = Mission;
@@ -371,6 +517,9 @@ public partial class MiniMap : Control
         var b = m.Belief;
         float cp = CellPx;
         float minH = map.H.Min(), maxH = map.H.Max();
+        if (map.N > 64)
+            DrawLargeBase(m, minH, maxH, cp);
+        else
         for (int y = 0; y < map.N; y++)
         for (int x = 0; x < map.N; x++)
         {
@@ -427,10 +576,22 @@ public partial class MiniMap : Control
         float ang = MathF.Atan2(m.Rover.Dir.Y, m.Rover.Dir.X);
         var tri = new[] { rp + new Vector2(MathF.Cos(ang), MathF.Sin(ang)) * (cp + 3), rp + new Vector2(MathF.Cos(ang + 2.4f), MathF.Sin(ang + 2.4f)) * (cp + 1), rp + new Vector2(MathF.Cos(ang - 2.4f), MathF.Sin(ang - 2.4f)) * (cp + 1) };
         DrawColoredPolygon(tri, Colors.White);
-        float errPx = m.Rover.PosErrorM / WorldMap.CellM * cp;
+        float errPx = m.Rover.PosErrorM / m.Map.CellM * cp;
         if (errPx > 1) DrawArc(rp, errPx, 0, MathF.Tau, 20, new Color(1, 1, 1, 0.4f), 1);
         if (m.FrontCell is Cell f && map.InBounds(f))
             DrawRect(new Rect2(f.X * cp, f.Y * cp, cp, cp), m.LastDecision?.Veto == true ? UiTheme.Crit : UiTheme.Ok, false, 1.5f);
+        // dron: traza, radio de barrido y posición
+        var dr = m.Drone;
+        if (dr.Available && dr.Flying)
+        {
+            var dc = new Color("3ec8ff");
+            Poly(dr.Track, new Color(dc, 0.6f), 1f);
+            DrawArc(Ctr(dr.Target), dr.ScanRadius * cp, 0, MathF.Tau, 32, new Color(dc, dr.Mode == DroneMode.Escaneando ? 0.9f : 0.4f), 1.2f);
+            var dp = new Vector2((dr.X + 0.5f) * cp, (dr.Y + 0.5f) * cp);
+            DrawLine(dp - new Vector2(cp + 2, cp + 2), dp + new Vector2(cp + 2, cp + 2), dc, 1.5f);
+            DrawLine(dp - new Vector2(cp + 2, -cp - 2), dp + new Vector2(cp + 2, -cp - 2), dc, 1.5f);
+            DrawCircle(dp, cp * 0.5f + 1.5f, dc);
+        }
         if (Hover is Cell h) DrawRect(new Rect2(h.X * cp, h.Y * cp, cp, cp), Colors.White, false, 1);
         Gfx.Text(this, new Vector2(2, map.N * cp - 13), Truth ? "VERDAD (simulador)" : "CREENCIA del rover", 9, Truth ? new Color("8ab0ff") : UiTheme.Dim);
     }
@@ -484,7 +645,7 @@ public partial class Sparklines : Control
         }
         S(0, "Batería %", Battery, 0, 100, UiTheme.Ok, $"{m.Rover.BatteryPct:0.0}");
         S(1, "T interior °C", TempInt, m.Planet.HardwareMinC, m.Planet.HardwareMaxC, UiTheme.Fuzzy, $"{m.Rover.TempInt:0.0}");
-        float wmax = MathF.Max(5, m.Planet.WindLimit * 1.2f);
+        float wmax = MathF.Max(5, m.WindLimitMs * 1.2f);
         S(2, "Ráfaga m/s", Wind, 0, wmax, UiTheme.Info, $"{m.Env.WindGust:0.0}");
         S(3, "Velocidad (0-1)", Speed, 0, 1, UiTheme.Rna, $"{(Speed.Count > 0 ? Speed[^1] : 0):0.00}");
         S(4, "Riesgo RNA", Risk, 0, 1, UiTheme.Crit, $"{(Risk.Count > 0 ? Risk[^1] : 0):0.00}");

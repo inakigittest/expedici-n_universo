@@ -5,7 +5,7 @@ using AresX.Core;
 
 namespace AresX.Sim;
 
-public enum Soil { Regolito, Roca, Arena, Hielo, Basalto, Urbano, Bosque, Matorral, SueloDesnudo, Pastizal, Agua, Barro, Nube }
+public enum Soil { Regolito, Roca, Arena, Hielo, Basalto, Urbano, Bosque, Matorral, SueloDesnudo, Pastizal, Agua, Barro, Nube, Cultivo, Quemado }
 
 public enum Hazard { None, Rock, Cliff, Water, Crater, Debris, Building, Tree, Storm, Downdraft, Alien }
 
@@ -31,7 +31,12 @@ public sealed class ScienceSite
 /// </summary>
 public sealed class WorldMap
 {
-    public const float CellM = 5f;          // metros por celda (SUPUESTO)
+    public const float RefCellM = 5f;       // celda de referencia (m): escala con la que se entrenó la RNA
+    public float CellM = RefCellM;          // metros por celda de este mapa (5 m procedural; 30 m en escenarios GeoClick)
+    /// <summary>Convierte un desnivel entre celdas vecinas a su equivalente sobre 5 m (rasgos de la RNA, LIDAR de borde).</summary>
+    public float DropScale => RefCellM / CellM;
+    public GeoReport Geo = GeoReport.Santiago;   // clima y calibración (Tierra)
+    public bool[]? Inside;                   // escenarios: celda dentro del polígono analizado
     public const int Sub = 3;               // vértices de relieve por celda (vista 3D)
     public const float MaxSlopeDeg = 30f;   // pendiente máxima de rodadura (SUPUESTO)
     public const float CliffDropM = 5f;     // salto vertical que se considera precipicio
@@ -57,6 +62,28 @@ public sealed class WorldMap
 
     public int FN => N * Sub + 1;
 
+    /// <summary>Escenario a escala real desde un informe GeoClick convertido.</summary>
+    public WorldMap(PlanetProfile planet, GeoReport scenario, int seed, int difficulty)
+    {
+        Planet = planet;
+        Seed = seed;
+        Difficulty = Math.Clamp(difficulty, 0, 2);
+        Geo = scenario;
+        N = scenario.N;
+        CellM = scenario.CellM;
+        Fine = new float[FN * FN];
+        H = new float[N * N];
+        Slope = new float[N * N];
+        Rough = new float[N * N];
+        Albedo = new float[N * N];
+        ObstacleH = new float[N * N];
+        Soils = new Soil[N * N];
+        Hazards = new Hazard[N * N];
+        GenerateFromScenario(scenario);
+    }
+
+    public bool IsScenario => Inside != null;
+
     public WorldMap(PlanetProfile planet, bool probe, int seed, int difficulty, int n = 40)
     {
         Planet = planet;
@@ -76,7 +103,9 @@ public sealed class WorldMap
     }
 
     // ------------------------------------------------------------------ acceso
-    public bool InBounds(Cell c) => c.X >= 0 && c.Y >= 0 && c.X < N && c.Y < N;
+    public bool InGrid(Cell c) => c.X >= 0 && c.Y >= 0 && c.X < N && c.Y < N;
+    /// <summary>Dentro del mapa jugable (en escenarios: dentro del polígono analizado).</summary>
+    public bool InBounds(Cell c) => InGrid(c) && (Inside == null || Inside[c.Y * N + c.X]);
     public int Idx(Cell c) => c.Y * N + c.X;
     public float Height(Cell c) => H[Idx(Clamp(c))];
     public Cell Clamp(Cell c) => new(Math.Clamp(c.X, 0, N - 1), Math.Clamp(c.Y, 0, N - 1));
@@ -139,7 +168,7 @@ public sealed class WorldMap
         var noise3 = new Noise2D(rng.Fork(3));
         int fn = FN;
         float inv = 1f / (fn - 1);
-        BaseElevation = Planet.Style == TerrainStyle.Tierra ? GeoClick.ElevMin : 0;
+        BaseElevation = Planet.Style == TerrainStyle.Tierra ? Geo.ElevMin : 0;
 
         // 1) relieve base
         for (int j = 0; j < fn; j++)
@@ -212,12 +241,12 @@ public sealed class WorldMap
             RecomputeCells();
             var s = Slope.OrderBy(x => x).ToArray();
             float median = s[s.Length / 2];
-            if (median < GeoClick.SlopeMedian) lo = k; else hi = k;
+            if (median < Geo.SlopeMedian) lo = k; else hi = k;
         }
         float min = Fine.Min();
         for (int i = 0; i < Fine.Length; i++)
             Fine[i] -= min;
-        Calibration = $"Escala vertical ×{k:0.0} → pendiente mediana {GeoClick.SlopeMedian:0.0}° (objetivo GeoClick)";
+        Calibration = $"Escala vertical ×{k:0.0} → pendiente mediana {Geo.SlopeMedian:0.0}° (objetivo GeoClick)";
     }
 
     private void CarveCanyon(Noise2D n, float threshold, float depth, bool segmented, bool onlySteep = false)
@@ -401,7 +430,7 @@ public sealed class WorldMap
     {
         Soil.Hielo => 0.6f, Soil.Arena => 0.32f, Soil.Regolito => 0.22f, Soil.Roca => 0.18f, Soil.Basalto => 0.12f,
         Soil.Urbano => 0.25f, Soil.Bosque => 0.1f, Soil.Matorral => 0.15f, Soil.SueloDesnudo => 0.28f, Soil.Pastizal => 0.2f,
-        Soil.Agua => 0.06f, Soil.Barro => 0.1f, _ => 0.5f,
+        Soil.Agua => 0.06f, Soil.Barro => 0.1f, Soil.Cultivo => 0.18f, Soil.Quemado => 0.07f, _ => 0.5f,
     };
 
     /// <summary>Coeficiente de rodadura (SUPUESTO) por suelo.</summary>
@@ -409,7 +438,7 @@ public sealed class WorldMap
     {
         Soil.Urbano => 0.03f, Soil.Hielo => 0.04f, Soil.Roca => 0.06f, Soil.Basalto => 0.07f, Soil.Regolito => 0.1f,
         Soil.Pastizal => 0.11f, Soil.SueloDesnudo => 0.12f, Soil.Matorral => 0.14f, Soil.Bosque => 0.16f, Soil.Arena => 0.2f,
-        Soil.Barro => 0.28f, Soil.Nube => 0.02f, _ => 0.1f,
+        Soil.Barro => 0.28f, Soil.Nube => 0.02f, Soil.Cultivo => 0.15f, Soil.Quemado => 0.13f, _ => 0.1f,
     };
 
     /// <summary>Probabilidad base de patinaje (SUPUESTO).</summary>
@@ -420,7 +449,7 @@ public sealed class WorldMap
 
     public static string SoilName(Soil s) => s switch
     {
-        Soil.SueloDesnudo => "suelo desnudo", Soil.Nube => "capa de nubes", _ => s.ToString().ToLowerInvariant(),
+        Soil.SueloDesnudo => "suelo desnudo", Soil.Nube => "capa de nubes", Soil.Cultivo => "cultivos", Soil.Quemado => "suelo quemado", _ => s.ToString().ToLowerInvariant(),
     };
 
     public static string HazardName(Hazard h) => h switch
@@ -640,12 +669,176 @@ public sealed class WorldMap
     private void ComputeSlopeHistogram()
     {
         var bins = new float[5];
-        foreach (float s in Slope)
+        int total = 0;
+        for (int i = 0; i < Slope.Length; i++)
+        {
+            if (Inside != null && !Inside[i]) continue;
+            float s = Slope[i];
             bins[s < 5 ? 0 : s < 15 ? 1 : s < 25 ? 2 : s < 35 ? 3 : 4]++;
+            total++;
+        }
         for (int i = 0; i < 5; i++)
-            bins[i] /= Slope.Length;
+            bins[i] /= Math.Max(1, total);
         SlopeHistogram = bins;
     }
+
+    // ------------------------------------------------------------------ escenario GeoClick a escala real
+    private static readonly Dictionary<Soil, string> ScenarioSiteKind = new()
+    {
+        [Soil.Bosque] = "Suelo de bosque", [Soil.Matorral] = "Matorral esclerófilo", [Soil.Pastizal] = "Pradera",
+        [Soil.Cultivo] = "Suelo agrícola", [Soil.Urbano] = "Estación de calibración urbana", [Soil.SueloDesnudo] = "Afloramiento rocoso",
+        [Soil.Quemado] = "Área quemada (regeneración)", [Soil.Barro] = "Humedal", [Soil.Hielo] = "Nieve estacional",
+    };
+
+    /// <summary>
+    /// Relieve real (DEM GLO-30 decodificado del informe) interpolado al relieve fino; suelos de ESA WorldCover;
+    /// cicatrices y áreas quemadas de Sentinel-2. Peligros a escala de 30 m: agua, edificios (manzanas), árboles
+    /// (bosque denso), escarpes (&gt; 40°) y detritos en las cicatrices. Fuera del polígono no se puede circular.
+    /// </summary>
+    private void GenerateFromScenario(GeoReport g)
+    {
+        var rng = new Rng((ulong)Seed * 7919UL + StableHash(g.Id));
+        var noise = new Noise2D(rng.Fork(2));
+        int n = N, fn = FN;
+        BaseElevation = g.ElevMin;
+        var e = g.Elev!;
+        for (int j = 0; j < fn; j++)
+        for (int i = 0; i < fn; i++)
+        {
+            float cx = Math.Clamp(i / (float)Sub - 0.5f, 0, n - 1.001f), cy = Math.Clamp(j / (float)Sub - 0.5f, 0, n - 1.001f);
+            int x0 = (int)cx, y0 = (int)cy;
+            float tx = cx - x0, ty = cy - y0;
+            float a = MathX.Lerp(e[y0 * n + x0], e[y0 * n + x0 + 1], tx);
+            float b = MathX.Lerp(e[(y0 + 1) * n + x0], e[(y0 + 1) * n + x0 + 1], tx);
+            Fine[j * fn + i] = MathX.Lerp(a, b, ty) - g.ElevMin;
+        }
+        RecomputeCells();
+        Inside = new bool[n * n];
+        for (int i = 0; i < n * n; i++) Inside[i] = g.CoverGrid![i] != 255;
+        float rockDensity = new[] { 0.02f, 0.04f, 0.07f }[Difficulty];
+        for (int y = 0; y < n; y++)
+        for (int x = 0; x < n; x++)
+        {
+            int i = y * n + x;
+            var c = new Cell(x, y);
+            if (!Inside[i])
+            {
+                Soils[i] = Soil.SueloDesnudo;
+                Albedo[i] = 0.12f;
+                Rough[i] = 0.3f;
+                continue;
+            }
+            byte marks = g.Marks?[i] ?? 0;
+            var soil = g.SoilOf(g.CoverGrid![i]);
+            if ((marks & 2) != 0 && soil is not (Soil.Agua or Soil.Urbano)) soil = Soil.Quemado;
+            float sl = Slope[i];
+            var hz = Hazard.None;
+            if (soil == Soil.Agua) hz = Hazard.Water;
+            else if (sl > 40f || (g.SlopeGrid?[i] == 4 && MaxDrop(c) * DropScale > CliffDropM * 0.8f)) hz = Hazard.Cliff;   // escarpe
+            else if ((marks & 1) != 0 && rng.Chance(0.55f)) hz = Hazard.Debris;
+            else if (soil == Soil.Urbano && rng.Chance(0.22f + Difficulty * 0.05f)) hz = Hazard.Building;
+            else if (soil == Soil.Bosque && rng.Chance(0.2f + Difficulty * 0.05f + MathF.Max(0, noise.Fbm(x * 0.09f, y * 0.09f, 2)) * 0.3f)) hz = Hazard.Tree;
+            else if (soil is Soil.SueloDesnudo or Soil.Matorral && rng.Chance(rockDensity * (0.6f + sl / 20f))) hz = Hazard.Rock;
+            float roughBase = soil switch
+            {
+                Soil.Urbano => 0.12f, Soil.Bosque => 0.55f, Soil.Matorral => 0.45f, Soil.SueloDesnudo => 0.42f, Soil.Pastizal => 0.25f,
+                Soil.Cultivo => 0.3f, Soil.Quemado => 0.4f, Soil.Hielo => 0.12f, Soil.Agua => 0.05f, _ => 0.3f,
+            };
+            Rough[i] = MathX.Clamp01(roughBase + rng.Gauss(0, 0.07f) + sl / 90f + ((marks & 1) != 0 ? 0.2f : 0));
+            Albedo[i] = SoilAlbedo(soil) + rng.Gauss(0, 0.02f);
+            Soils[i] = soil;
+            Hazards[i] = hz;
+            ObstacleH[i] = hz switch
+            {
+                Hazard.Rock => rng.Range(0.8f, 2.6f), Hazard.Building => rng.Range(6f, 18f), Hazard.Tree => rng.Range(8f, 22f),
+                Hazard.Debris => rng.Range(0.8f, 2.2f), _ => 0,
+            };
+        }
+
+        // base: celda libre y plana más cercana a la esquina suroeste del polígono; estación a ~2/3 del alcance (≤ 70 celdas)
+        bool Free(Cell c) => InBounds(c) && Hazards[Idx(c)] == Hazard.None && Slope[Idx(c)] < 10f;
+        // componente transitable más grande (en montaña muchas zonas quedan aisladas por pendientes > 30°)
+        var comp = new int[n * n];
+        Array.Fill(comp, -1);
+        int bestComp = -1, bestSize = 0, label = 0;
+        for (int i0 = 0; i0 < n * n; i0++)
+        {
+            var c0 = new Cell(i0 % n, i0 / n);
+            if (comp[i0] >= 0 || !Passable(c0)) continue;
+            int size = 0;
+            var q = new Queue<Cell>();
+            q.Enqueue(c0);
+            comp[i0] = label;
+            while (q.Count > 0)
+            {
+                var c = q.Dequeue();
+                size++;
+                foreach (var d in Cell.Dirs8)
+                {
+                    var o = c + d;
+                    if (!InBounds(o) || comp[Idx(o)] >= 0 || !Passable(o)) continue;
+                    comp[Idx(o)] = label;
+                    q.Enqueue(o);
+                }
+            }
+            if (size > bestSize) { bestSize = size; bestComp = label; }
+            label++;
+        }
+        Cell best = new(n / 2, n / 2);
+        float bestScore = float.MaxValue;
+        for (int y = 2; y < n - 2; y++)
+        for (int x = 2; x < n - 2; x++)
+        {
+            var c = new Cell(x, y);
+            if (!Free(c) || comp[Idx(c)] != bestComp) continue;
+            int clear = Cell.Dirs8.Count(d => Free(c + d));
+            float score = x + (n - 1 - y) + (8 - clear) * 6 + Slope[Idx(c)];
+            if (score < bestScore) { bestScore = score; best = c; }
+        }
+        Start = best;
+        ClearAround(Start, 1);
+        Refuges.Add(Start);
+        var dist = BfsDistance(Start, Passable);
+        int maxD = dist.Max();
+        int want = Math.Max(12, Math.Min(maxD * 2 / 3, 70));
+        var station = Enumerable.Range(0, n * n).Where(i => dist[i] >= want - 4 && dist[i] <= want + 4 && Free(new Cell(i % n, i / n)))
+            .Select(i => new Cell(i % n, i / n)).OrderBy(_ => rng.F()).FirstOrDefault(Start);
+        if (station != Start)
+        {
+            ClearAround(station, 1);
+            Refuges.Add(station);
+        }
+
+        // sitios científicos con el tipo del suelo real de la celda (preferencia: cicatrices, quemas, riberas)
+        int count = 6 + Difficulty * 2;
+        int spacing = Math.Max(6, Math.Min(want / 3, 18));
+        bool Riverside(Cell c) => Cell.Dirs8.Any(d => HazardAt(c + d) == Hazard.Water);
+        var cand = Enumerable.Range(0, n * n).Where(i => dist[i] > 6 && dist[i] < want * 1.4f + 10 && Free(new Cell(i % n, i / n)))
+            .Select(i => (i, key: rng.F() - ((g.Marks?[i] ?? 0) != 0 ? 0.35f : 0) - (Riverside(new Cell(i % n, i / n)) ? 0.3f : 0)))
+            .OrderBy(t => t.key).Select(t => t.i).ToList();
+        foreach (int i in cand)
+        {
+            if (Sites.Count >= count) break;
+            var c = new Cell(i % n, i / n);
+            if (Refuges.Any(r => r.Dist(c) < 5) || Sites.Any(s => s.Cell.Dist(c) < spacing)) continue;
+            byte marks = g.Marks?[i] ?? 0;
+            string kind = (marks & 1) != 0 ? "Cicatriz de aluvión o remoción" : Riverside(c) ? "Ribera y sedimentos" : ScenarioSiteKind.GetValueOrDefault(Soils[i], "Punto de control");
+            var site = new ScienceSite
+            {
+                Id = Sites.Count, Cell = c, Kind = kind,
+                Value = MathF.Round(rng.Range(0.35f, 1f), 2), MassKg = MathF.Round(rng.Range(0.4f, 2.2f), 1), AnalysisWh = MathF.Round(rng.Range(2f, 6f), 1),
+            };
+            site.Name = $"S{site.Id + 1}";
+            Sites.Add(site);
+        }
+        if (Sites.Count > 0 && rng.Chance(0.4f)) Sites[rng.Int(0, Sites.Count)].Anomaly = true;
+        EnsureConnectivity();
+        RecomputeCells();
+        ComputeSlopeHistogram();
+        Calibration = $"Escenario a escala real: {n}×{n} celdas de {CellM:0} m ({n * CellM / 1000f:0.0} km de lado) · relieve DEM GLO-30 decodificado del informe {g.Id}";
+        Version++;
+    }
+
 
     // ------------------------------------------------------------------ cambios en tiempo de ejecución
     /// <summary>Crea (o desplaza) un barranco: hunde el relieve de la celda y la marca como precipicio.</summary>
@@ -734,8 +927,8 @@ public sealed class WorldMap
         for (int k = 0; k < n * 4 && changed.Count < n; k++)
         {
             var c = new Cell(rng.Int(1, N - 1), rng.Int(1, N - 1));
-            if (Hazards[Idx(c)] != Hazard.None || Refuges.Contains(c) || Sites.Any(s => s.Cell == c)) continue;
-            if (Slope[Idx(c)] > 12f || MaxDrop(c) > 2.5f)
+            if (!InBounds(c) || Hazards[Idx(c)] != Hazard.None || Refuges.Contains(c) || Sites.Any(s => s.Cell == c)) continue;
+            if (Slope[Idx(c)] > 12f || MaxDrop(c) * DropScale > 2.5f)
             {
                 Hazards[Idx(c)] = Hazard.Rock;
                 ObstacleH[Idx(c)] = rng.Range(0.6f, 1.8f);

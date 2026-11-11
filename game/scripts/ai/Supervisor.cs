@@ -49,6 +49,9 @@ public sealed class SupervisorInput
     public float SolarW;
     public bool ProposedForbidden; // celda prohibida en las creencias
     public bool ManualCommand;
+    // helicóptero
+    public bool Heli;
+    public float PowerMargin = 9f, ClimbDeg, RainMmH, VisM = 99999f;
 }
 
 /// <summary>
@@ -107,7 +110,28 @@ public static class SafetySupervisor
         var c4 = Check("S-04", "Sin sismo activo", i.QuakeAccel < 0.9f, $"aceleración {i.QuakeAccel:0.00} m/s²", true);
         if (!c4.Passed) Set(RoverAction.Esperar, "S-04", "Sismo: frenar, esperar y remedir", c4);
 
-        if (i.HasProposal)
+        // H-01…H-04: envolvente de vuelo del helicóptero (sustituye a las reglas de rodadura S-06…S-09 y S-13)
+        if (i.Heli)
+        {
+            var h1 = Check("H-01", "Margen de potencia (densidad del aire)", i.PowerMargin >= 1.0f, $"disponible / estacionario = {i.PowerMargin:0.00}", true);
+            if (!h1.Passed)
+            {
+                d.Veto = true;
+                Set(RoverAction.Esperar, "H-01", "Potencia insuficiente para el vuelo estacionario con esta densidad de aire: aterrizar y esperar aire más frío o denso", h1);
+            }
+            else if (i.PowerMargin < 1.12f) { d.Alert = true; d.SpeedCap = MathF.Min(d.SpeedCap, 0.6f); h1.Applied = true; }
+            var h3 = Check("H-03", "Lluvia bajo el límite de vuelo", i.RainMmH < HeliModel.RainLimitMmH, $"{i.RainMmH:0.0} mm/h (límite {HeliModel.RainLimitMmH:0})", true);
+            if (!h3.Passed) Set(RoverAction.Esperar, "H-03", "Lluvia intensa: aterrizar y esperar", h3);
+            var h4 = Check("H-04", "Visibilidad de vuelo visual ≥ 1500 m", i.VisM >= HeliModel.MinVisM, $"{i.VisM:0} m", true);
+            if (!h4.Passed) Set(RoverAction.Esperar, "H-04", "Visibilidad bajo el mínimo de vuelo visual: aterrizar y esperar", h4);
+            if (i.HasProposal)
+            {
+                var h2 = Check("H-02", "Ascenso dentro de la tasa máxima", i.ClimbDeg < 30f, $"relieve de {i.ClimbDeg:0}° en la dirección de vuelo", false);
+                if (i.ClimbDeg > 15f) { d.SpeedCap = MathF.Min(d.SpeedCap, i.ClimbDeg > 30f ? 0.3f : 0.5f); h2.Applied = true; }
+            }
+        }
+
+        if (i.HasProposal && !i.Heli)
         {
             // S-05 dentro del mapa
             var c5 = Check("S-05", "Destino dentro del mapa", i.Proposed.X >= 0 && i.Proposed.Y >= 0, i.Proposed.ToString(), true);
@@ -197,8 +221,8 @@ public static class SafetySupervisor
             c12.Applied = true;
         }
 
-        // S-13 visibilidad
-        bool visOk = s.Ok("vis") && s.V("vis") >= 150;
+        // S-13 visibilidad (rodadura; el helicóptero usa H-04)
+        bool visOk = i.Heli || s.Ok("vis") && s.V("vis") >= 150;
         var c13 = Check("S-13", "Visibilidad ≥ 150 m", visOk, s.Ok("vis") ? $"{s.V("vis"):0} m" : "no válida", false);
         if (!visOk) { d.SpeedCap = MathF.Min(d.SpeedCap, 0.2f); c13.Applied = true; }
 

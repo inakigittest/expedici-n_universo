@@ -13,6 +13,13 @@ patas con bogies de 3 ruedas (estilo ATHLETE), chasis de electrónica con lámin
 robótico con torreta, antena de alta ganancia, paneles solares y RTG. En los gigantes gaseosos (modo sonda) se usa el
 Solaris Ranger con propulsores.
 
+**Vehículos:** rover de ruedas (todos los cuerpos rocosos), sonda atmosférica (gigantes gaseosos) y
+**helicóptero no tripulado** (solo la Tierra). El rover lleva además un **dron explorador** en la Tierra y en Marte.
+
+**Escenarios GeoClick a escala real:** en la Tierra se puede jugar sobre 8 áreas reales convertidas desde informes
+GeoClick (DEM Copernicus GLO-30 de 30 m, cobertura ESA WorldCover, imagen Sentinel-2, cicatrices, áreas quemadas y
+clima ERA5): de 8 a 71 km², con celdas de 30 m y la imagen satelital como textura del terreno.
+
 **Cada paso** hacia el destino pasa por el ciclo completo:
 
 ```
@@ -29,7 +36,7 @@ Todo se ve en tiempo real en el HUD.
 
 | Ruta | Contenido |
 |---|---|
-| `game/` | Proyecto Godot 4.7.2 .NET (C#): `scripts/`, `scenes/`, `shaders/`, `assets/` (sprites del rover), `data/rna_model.json` (RNA pre-entrenada), `export_presets.cfg` (Android y Windows) |
+| `game/` | Proyecto Godot 4.7.2 .NET (C#): `scripts/`, `scenes/`, `shaders/`, `assets/` (sprites del rover), `data/rna_model.json` (RNA pre-entrenada), `data/escenarios/` (8 escenarios GeoClick: JSON con grillas + textura satelital), `export_presets.cfg` (Android y Windows) |
 | `installer/` | Script de Inno Setup del instalador de Windows (`crear_instalador.cmd`) |
 | `jugar.cmd` | Compila el C# y abre el juego (o el editor con `-e`) |
 
@@ -72,6 +79,63 @@ En el teléfono:
 La red neuronal viene pre-entrenada en `data/rna_model.json`, con los mismos pesos que produce la semilla 2026, así
 que el teléfono no entrena. Las exportaciones CSV/JSON quedan en la carpeta de datos de la app.
 
+## Escenarios GeoClick a escala real
+
+Cada informe PDF de GeoClick se convirtió (sin red, solo con el PDF) en un escenario: las figuras ráster del informe
+se decodifican y se remuestrean a una grilla cuadrada de celdas de 30 m (la resolución del DEM).
+
+| Capa del informe | Uso en el juego |
+|---|---|
+| Elevación (viridis sobre el rango del área) | relieve real en metros; el tamaño real sale de las marcas de coordenadas o de la barra de escala (el área del polígono reconstruido coincide con la del informe ±1 %) |
+| Cobertura ESA WorldCover | suelo de cada celda: agua (prohibida), manzanas urbanas, bosque denso, matorral, pastizal, cultivos, suelo desnudo |
+| Pendiente en 5 clases | escarpes (> 35–40°) |
+| Cicatrices y áreas quemadas (Sentinel-2) | detritos y suelo quemado; sitios científicos preferentes |
+| Imagen Sentinel-2 en color real | textura del terreno 3D y fondo del mapa 2D en modo verdad |
+| Clima ERA5 (lluvia y temperatura mensual, periodos de retorno de Gumbel) | lluvia, temperatura, humedad del suelo, tormentas y remociones del escenario |
+
+- Los mapas tienen de 126×126 a 317×317 celdas (3,8 a 9,5 km de lado). Fuera del polígono analizado no se puede circular.
+- **El informe es el conocimiento orbital previo del rover:** relieve y cobertura conocidos desde el inicio. Lo que el
+  informe no resuelve (rocas, árboles o edificios puntuales) lo descubre la RNA en el camino.
+- A esta escala el vehículo es un rover terrestre de campo (2 m/s, 6 kWh) o el helicóptero.
+- **Rendimiento:** la malla del terreno usa un vértice por celda y el detalle visual viene de la imagen satelital más una
+  textura de grano procedural. Las creencias y el mapa 2D se pintan como texturas de un píxel por celda. La planificación
+  usa A* y Dijkstra sobre arreglos en caché: unos 10–20 ms por paso en mapas de 100 000 celdas.
+- Datos: Copernicus DEM GLO-30 © DLR/Airbus (ESA), ESA WorldCover 2021 (CC BY 4.0), Sentinel-2 (Copernicus) y ERA5
+  (Copernicus/ECMWF), obtenidos a través de los informes GeoClick.
+
+## Helicóptero no tripulado (solo Tierra)
+
+- Modelo de potencia por teoría de cantidad de movimiento: el vuelo estacionario necesita (m g)^1,5 / √(2 ρ A) / FM
+  y la potencia disponible del motor cae con la densidad del aire. En cordillera y con calor el margen de potencia se
+  estrecha (1,74 a nivel del mar y 15 °C; 1,10 a 2600 m y 25 °C).
+- La curva de potencia en avance (inducida + perfil + parásita) da el costo de cada tramo; el AG elige rutas que
+  ahorran ascensos sobre el relieve real.
+- Para muestrear aterriza si la zona es apta (pendiente < 12°, sin agua, árboles, edificios ni rocas); si no, usa un
+  cabrestante en vuelo estacionario, que gasta más energía.
+- El supervisor agrega la envolvente de vuelo: H-01 margen de potencia, H-02 tasa de ascenso, H-03 lluvia > 8 mm/h,
+  H-04 visibilidad < 1500 m. Además S-10 aplica a ráfagas > 15 m/s.
+- Supuestos: 300 kg, rotor de 6,4 m, crucero de 25 m/s a 90 m sobre el terreno y 20 kWh embarcados.
+
+## Dron explorador
+
+- Viaja acoplado al rover en la Tierra y en Marte (como Ingenuity). En Mercurio y Venus no hay aire o el ambiente lo
+  destruye, así que no está disponible.
+- Una decisión difusa (incertidumbre de la ruta, viento y batería del dron) calcula su **conveniencia de despliegue**.
+- Vuela al tramo más incierto, la RNA analiza el terreno desde el aire y el LIDAR confirma barrancos y obstáculos.
+- Al final barre un radio de 25 m y puede **generar objetivos científicos nuevos** (afloramientos rocosos).
+- Restricciones: batería mínima, ráfagas, lluvia, polvo y enlace; regresa antes de agotar la reserva.
+- En Marte, con 20 semillas, el dron sube el éxito de 95 % a 100 %, baja las replanificaciones de 15,8 a 11,4 y sube
+  la ciencia de 2,65 a 3,26.
+
+## Interfaz
+
+- Los controles están fijos en una columna a la derecha (simulación, eventos, dron y ventanas).
+- Telemetría, decisión, bitácora, mapa y los cinco laboratorios son **ventanas flotantes**: se arrastran, se minimizan
+  (doble clic en el título) y se redimensionan. Hay disposiciones predefinidas (Limpia, Análisis, Paneles) y un control
+  de opacidad. La disposición se guarda entre sesiones.
+- Los laboratorios de RNA, difuso y genético funcionan **en vivo sin pausar la misión**; el genético puede reproducir
+  la evolución generación por generación.
+
 ## Controles
 
 | Tecla | Acción |
@@ -86,7 +150,8 @@ que el teléfono no entrena. Las exportaciones CSV/JSON quedan en la carpeta de 
 | V / T / C | mapa de riesgo RNA / verdad del simulador / rutas candidatas del AG |
 | P | forzar replanificación del AG |
 | F1…F11 | sismo, tormenta, meteorito, fallo de sensor (Mayús+F4 repara), noche, enlace, ráfaga, biofirma, alien (ficción), batería 12 %, remoción (Tierra) |
-| Tab / H | laboratorios / ayuda |
+| D | desplegar el dron (a la celda bajo el cursor o al tramo más incierto) · en vuelo: ordenar regreso |
+| Tab / H | laboratorio RNA / ayuda |
 | F12 | exportar traza CSV y resultado JSON a `game/exports/` |
 | R | volver a la configuración |
 
@@ -105,11 +170,11 @@ que el teléfono no entrena. Las exportaciones CSV/JSON quedan en la carpeta de 
 
 | Carpeta | Contenido |
 |---|---|
-| `game/scripts/core/` | `Rng` (SplitMix64 determinista), ruido fBm, `Cell`; `HeadlessRunner` (`--selftest`, `--benchmark`, `--diag`) |
-| `game/scripts/sim/` | `PlanetProfile` (8 cuerpos + calibración `GeoClick`), `WorldMap` (40×40 celdas de 5 m), `SimEnvironment` (reloj, viento OU, lluvia, polvo, sismos, eventos), `Sensors` (`RoverState`, `SensorSuite`, validación), `Mission` (ciclo por paso, estados, física, ablaciones, eventos, CSV/JSON), `Benchmark` |
-| `game/scripts/ai/` | `NeuralNet` (MLP 11→32→16→3 desde cero, Adam, métricas), `Perception` (modelo de rasgos, dataset por mapas, `BeliefMap`), `Fuzzy` (Mamdani genérico + 6 entradas / 2 salidas / 16 reglas), `Planning` (`RouteGA` de puntos de paso, `MissionGA` viajero+mochila, `CostModel`), `Supervisor` (S-01…S-13) |
-| `game/scripts/view/` | terreno, objetos, capas (rutas, creencias, marcadores), robot (MechRig), cámara, cielo y partículas |
-| `game/scripts/ui/` | tema, HUD, paneles dibujados a mano, configuración, laboratorios |
+| `game/scripts/core/` | `Rng` (SplitMix64 determinista), ruido fBm, `Cell`; `Scenarios` (catálogo de escenarios GeoClick); `HeadlessRunner` (`--selftest`, `--benchmark`, `--diag [--scenario=id] [--heli]`) |
+| `game/scripts/sim/` | `PlanetProfile` (8 cuerpos), `GeoReport` (datos de un informe GeoClick), `WorldMap` (40×40 celdas de 5 m o escenario a escala de 30 m), `SimEnvironment` (reloj, viento OU, lluvia, polvo, sismos, eventos), `Sensors` (`RoverState`, `SensorSuite`, validación), `Mission` (ciclo por paso, estados, física, ablaciones, eventos, CSV/JSON), `Drone` (dron explorador), `Helicopter` (modelo de potencia y vuelo), `Benchmark` |
+| `game/scripts/ai/` | `NeuralNet` (MLP 11→32→16→3 desde cero, Adam, métricas), `Perception` (modelo de rasgos, dataset por mapas, `BeliefMap`), `Fuzzy` (Mamdani genérico + 6 entradas / 2 salidas / 16 reglas), `Planning` (`RouteGA` de puntos de paso, `MissionGA` viajero+mochila, `CostModel`), `Supervisor` (S-01…S-13 y H-01…H-04 de vuelo) |
+| `game/scripts/view/` | terreno (procedural o satelital), objetos, capas (rutas, creencias, marcadores), robot (MechRig) y helicóptero, dron, cámara, cielo y partículas |
+| `game/scripts/ui/` | tema, HUD, ventanas flotantes (`FloatPanel`, `WindowManager`), paneles dibujados a mano, configuración, laboratorios en vivo |
 | `game/scripts/mechs/` | `MechRig` y `MechData`, copiados del proyecto de mechas (sprites del rover en `assets/mechs/parts/exp_*`) |
 
 La simulación (`sim/`, `ai/`) no usa la API de Godot: corre sin ventana y es determinista por semilla.
@@ -130,18 +195,22 @@ La simulación (`sim/`, `ai/`) no usa la API de Godot: corre sin ventana y es de
 
 Ejemplo, Marte con 20 semillas y batería del 80 % (`--benchmark=marte`):
 
-| Política | Éxito | Violaciones de seguridad |
-|---|---|---|
-| Híbrido | 95 % | 0,20 |
-| Sin RNA | 85 % | 0,65 |
-| Sin difuso | 95 % | 0,10 |
-| Sin AG | 75 % | 0,45 |
-| AG puro | 85 % | 0,50 |
-| Control (menor distancia) | 60 % | 1,65 |
+| Política | Éxito | Ciencia | Replanificaciones | Violaciones de seguridad |
+|---|---|---|---|---|
+| Híbrido completo | 100 % | 3,26 | 11,4 | 0,10 |
+| Híbrido sin dron | 95 % | 2,65 | 15,8 | 0,15 |
+| Sin RNA | 80 % | 2,80 | 10,3 | 0,60 |
+| Sin difuso | 90 % | 3,22 | 26,2 | 0,15 |
+| Sin AG | 65 % | 4,86 | 48,0 | 0,45 |
+| AG puro | 80 % | 2,49 | 8,9 | 0,75 |
+| Control (menor distancia) | 40 % | 2,52 | 20,7 | 1,55 |
 
 ## Supuestos y límites
 
 - **Simulación ficticia.** Los valores planetarios son aproximaciones de referencia (NASA). Daño, energía, radiación y fallos son hipótesis pedagógicas (ver la pestaña Ayuda y el JSON exportado).
+- **Escenarios GeoClick:** el relieve sale de la figura de elevación del informe (cuantizada a 256 niveles y con
+  compresión JPEG), no del GeoTIFF original. La pendiente mediana calculada queda entre 0,5° y 2° por debajo de la
+  del informe. El rover terrestre de campo y el helicóptero son vehículos supuestos.
 - **Supuestos de diseño:** celda de 5 m, pendiente máxima 30°, precipicio = caída mayor a 5 m. Rover de 900 kg, 0,5 m/s y 320 Wh. Sonda de 350 kg, 2,5 m/s, 420 Wh y RTG de 110 W. El día está comprimido para que haya ciclo día/noche dentro de una misión.
 - **Tierra calibrada con GeoClick 40e9efb1 (Santiago):** la escala vertical se ajusta hasta una pendiente mediana de 6,7°. Usa la lluvia media mensual (ERA5), los periodos de retorno de Gumbel para tormentas y remociones, y las temperaturas mensuales.
 - **Navegación:** usa la celda real; el error de odometría se calcula y se muestra como diagnóstico, y se corrige en refugios y sitios.

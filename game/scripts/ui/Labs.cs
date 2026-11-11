@@ -209,8 +209,17 @@ public partial class Labs : CanvasLayer
     public Mission? Mission;
     public NeuralPerception? Rna;
     public Action? Closed;
-    private TabContainer _tabs = null!;
+    /// <summary>Móvil: al abrir un laboratorio se cierran los cajones del HUD.</summary>
+    public Action? OpenedOnMobile;
     private Control _root = null!;
+    public static readonly string[] Ids = { "lab_rna", "lab_fuzzy", "lab_ga", "lab_policies", "lab_help" };
+    private readonly Dictionary<string, FloatPanel> _wins = new();
+    private readonly Dictionary<string, CheckButton> _liveChecks = new();
+    private bool _dirty;
+    private double _sinceRefresh;
+    private int _gaSeen = -1;
+    private bool _gaPlaying;
+    private double _gaPlayT;
 
     // RNA
     private NetDiagram _net = null!;
@@ -252,55 +261,119 @@ public partial class Labs : CanvasLayer
     public override void _Ready()
     {
         Layer = 4;
-        _root = new Control { Theme = UiTheme.Get(), Visible = false };
+        // capa transparente a los clics: solo las ventanas capturan el ratón
+        _root = new Control { Theme = UiTheme.Get(), MouseFilter = Control.MouseFilterEnum.Ignore };
         _root.SetAnchorsPreset(Control.LayoutPreset.FullRect);
         AddChild(_root);
-        var dim = new ColorRect { Color = new Color(0, 0, 0, 0.55f) };
-        dim.SetAnchorsPreset(Control.LayoutPreset.FullRect);
-        _root.AddChild(dim);
-        _tabs = new TabContainer();
-        _root.AddChild(_tabs);
-        Hud.Anchor(_tabs, 0, 0, 1, 1, 14, 34, -14, -14);
-        var close = UiTheme.Button("✕ Cerrar (Esc)", Close);
-        _root.AddChild(close);
-        Hud.Anchor(close, 1, 0, 1, 0, -130, 36, -18, 60);
         BuildRna();
         BuildFuzzy();
         BuildGa();
         BuildPolicies();
         BuildHelp();
-        _tabs.TabChanged += _ => RefreshTab();
     }
 
-    public bool IsOpen => _root.Visible;
+    /// <summary>
+    /// Crea la ventana flotante de un laboratorio. Los de RNA, difuso y genético llevan el interruptor "En vivo": se
+    /// actualizan con cada paso de la simulación hasta que el usuario toca un control para experimentar.
+    /// </summary>
+    private void AddWindow(string id, string title, Control page, Rect2 rect, bool live)
+    {
+        var w = new FloatPanel(id, title, rect) { Docked = Platform.IsMobile, Visible = false };
+        _root.AddChild(w);
+        if (Platform.IsMobile) Hud.Anchor(w, 0, 0, 1, 1, 6, 32, -138, -54);
+        if (live)
+        {
+            var bar = new HBoxContainer();
+            var chk = new CheckButton { Text = "En vivo", ButtonPressed = true, FocusMode = Control.FocusModeEnum.None, TooltipText = "Seguir la simulación paso a paso (se apaga al mover un control)" };
+            chk.AddThemeFontSizeOverride("font_size", 11);
+            chk.Toggled += on => { if (on) { _dirty = true; _sinceRefresh = 1; } };
+            bar.AddChild(chk);
+            bar.AddChild(UiTheme.Label("· sin pausar la misión", 10, UiTheme.Dim));
+            w.Content.AddChild(bar);
+            _liveChecks[id] = chk;
+        }
+        var scroll = new ScrollContainer { SizeFlagsVertical = Control.SizeFlags.ExpandFill, SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+        page.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        page.SizeFlagsVertical = Control.SizeFlags.ExpandFill;
+        scroll.AddChild(page);
+        w.Content.AddChild(scroll);
+        w.Shown += () => RefreshWindow(id, true);
+        _wins[id] = w;
+    }
+
+    private bool Live(string id) => _wins.TryGetValue(id, out var w) && w.Visible && !w.Minimized && (!_liveChecks.TryGetValue(id, out var c) || c.ButtonPressed);
+
+    private void SetLive(string id, bool on)
+    {
+        if (_liveChecks.TryGetValue(id, out var c) && c.ButtonPressed != on) c.SetPressedNoSignal(on);
+    }
+
+    public bool IsOpen => _wins.Values.Any(w => w.Visible);
+
+    public bool IsOverUi(Vector2 p) => _wins.Values.Any(w => w.IsVisibleInTree() && w.GetGlobalRect().HasPoint(p));
 
     public void Open(int tab)
     {
-        _root.Visible = true;
-        _tabs.CurrentTab = tab;
-        if (Mission != null)
+        string id = Ids[Math.Clamp(tab, 0, Ids.Length - 1)];
+        if (Platform.IsMobile)
         {
-            _raw = (float[])Mission.FrontFeatures.Clone();
-            _sampleLabel = null;
-            LoadFuzzyInputs();
-            FillGaRuns();
+            foreach (var w in _wins.Values) if (w.Id != id) w.SetOpen(false);
+            OpenedOnMobile?.Invoke();
         }
-        RefreshTab();
+        WindowManager.Open(id);
+        RefreshWindow(id, true);
+    }
+
+    public void Toggle(string id)
+    {
+        if (!_wins.TryGetValue(id, out var w)) return;
+        if (w.Visible) w.SetOpen(false);
+        else Open(Array.IndexOf(Ids, id));
     }
 
     public void Close()
     {
-        _root.Visible = false;
+        foreach (var w in _wins.Values) w.SetOpen(false);
         Closed?.Invoke();
     }
 
-    private void RefreshTab()
+    /// <summary>La simulación dio un paso: los laboratorios en vivo se refrescan (como mucho ~4 veces por segundo).</summary>
+    public void NotifyStep() => _dirty = true;
+
+    private void RefreshWindow(string id, bool force)
     {
-        switch (_tabs.CurrentTab)
+        if (Mission == null) return;
+        switch (id)
         {
-            case 0: RefreshRna(true); break;
-            case 1: RefreshFuzzy(); break;
-            case 2: RefreshGa(); break;
+            case "lab_rna":
+                if (force || Live(id))
+                {
+                    if (Live(id) || force)
+                    {
+                        _raw = (float[])Mission.FrontFeatures.Clone();
+                        _sampleLabel = null;
+                    }
+                    RefreshRna(true);
+                }
+                break;
+            case "lab_fuzzy":
+                if (Live(id) || force) LoadFuzzyInputs();
+                RefreshFuzzy();
+                break;
+            case "lab_ga":
+                if (force || _gaSeen != Mission.GaHistory.Count + Mission.Replans * 1000)
+                {
+                    _gaSeen = Mission.GaHistory.Count + Mission.Replans * 1000;
+                    FillGaRuns();
+                    if (Live(id) && Mission.GaHistory.Count > 0 && !force)
+                    {
+                        _gaPlaying = true;   // reproducir la evolución de la corrida nueva
+                        _gaPlayT = 0;
+                        _gen.SetValueNoSignal(0);
+                    }
+                }
+                RefreshGa();
+                break;
         }
     }
 
@@ -312,7 +385,7 @@ public partial class Labs : CanvasLayer
     {
         var page = H(12);
         page.Name = "Laboratorio RNA";
-        _tabs.AddChild(page);
+        AddWindow("lab_rna", "LABORATORIO RNA · percepción en vivo", page, new Rect2(340, 60, 760, 470), true);
         var left = V();
         left.CustomMinimumSize = new Vector2(560, 0);
         page.AddChild(left);
@@ -325,6 +398,7 @@ public partial class Labs : CanvasLayer
         btns.AddChild(UiTheme.Button("Usar la celda evaluada ahora", () => { if (Mission != null) { _raw = (float[])Mission.FrontFeatures.Clone(); _sampleLabel = null; RefreshRna(true); } }));
         btns.AddChild(UiTheme.Button("Muestra aleatoria del conjunto de prueba", () =>
         {
+            SetLive("lab_rna", false);
             if (Rna == null || Rna.TestX.Count == 0) return;
             int i = (int)(GD.Randi() % (uint)Rna.TestX.Count);
             _raw = (float[])Rna.TestX[i].Clone();
@@ -357,7 +431,7 @@ public partial class Labs : CanvasLayer
             var lab = UiTheme.Label(FeatureModel.Names[i], 11, UiTheme.Dim);
             lab.CustomMinimumSize = new Vector2(150, 0);
             var s = new HSlider { CustomMinimumSize = new Vector2(150, 16), Step = 0.01 };
-            s.ValueChanged += v => { if (_suppress) return; _raw[k] = (float)v; _sampleLabel = null; RefreshRna(false); };
+            s.ValueChanged += v => { if (_suppress) return; SetLive("lab_rna", false); _raw[k] = (float)v; _sampleLabel = null; RefreshRna(false); };
             grid.AddChild(lab);
             grid.AddChild(s);
             _featSliders.Add(s);
@@ -420,7 +494,7 @@ public partial class Labs : CanvasLayer
     {
         var page = H(12);
         page.Name = "Laboratorio Difuso";
-        _tabs.AddChild(page);
+        AddWindow("lab_fuzzy", "LABORATORIO DIFUSO · control en vivo", page, new Rect2(360, 80, 780, 470), true);
         var left = V(4);
         left.CustomMinimumSize = new Vector2(720, 0);
         page.AddChild(left);
@@ -433,7 +507,7 @@ public partial class Labs : CanvasLayer
             var box = V(1);
             var plot = new MembershipPlot { Var = v, CustomMinimumSize = new Vector2(232, 118) };
             var s = new HSlider { MinValue = v.Min, MaxValue = v.Max, Step = (v.Max - v.Min) / 200, CustomMinimumSize = new Vector2(232, 16) };
-            s.ValueChanged += _ => RefreshFuzzy();
+            s.ValueChanged += _ => { SetLive("lab_fuzzy", false); RefreshFuzzy(); };
             box.AddChild(plot);
             box.AddChild(s);
             grid.AddChild(box);
@@ -502,14 +576,14 @@ public partial class Labs : CanvasLayer
     {
         var page = H(12);
         page.Name = "Laboratorio Genético";
-        _tabs.AddChild(page);
+        AddWindow("lab_ga", "LABORATORIO GENÉTICO · planificación en vivo", page, new Rect2(380, 100, 760, 470), true);
         var left = V();
         left.CustomMinimumSize = new Vector2(640, 0);
         page.AddChild(left);
         var top = H(8);
         top.AddChild(UiTheme.Label("Corrida del AG:", 12, UiTheme.Ga));
         _gaRun = new OptionButton { CustomMinimumSize = new Vector2(380, 0) };
-        _gaRun.ItemSelected += _ => { _gen.Value = 0; RefreshGa(); };
+        _gaRun.ItemSelected += _ => { SetLive("lab_ga", false); _gaPlaying = false; _gen.Value = 0; RefreshGa(); };
         top.AddChild(_gaRun);
         left.AddChild(top);
         _fit = new LineChart { Title = "Fitness por generación (mejor / media / peor)", XLabel = "generación", CustomMinimumSize = new Vector2(620, 200) };
@@ -517,10 +591,11 @@ public partial class Labs : CanvasLayer
         var gr = H(8);
         gr.AddChild(UiTheme.Label("Generación:", 12, UiTheme.Ga));
         _gen = new HSlider { CustomMinimumSize = new Vector2(420, 18), Step = 1 };
-        _gen.ValueChanged += _ => RefreshGa();
+        _gen.ValueChanged += _ => { if (!_gaPlaying) SetLive("lab_ga", false); RefreshGa(); };
         gr.AddChild(_gen);
         _genLabel = UiTheme.Label("", 12);
         gr.AddChild(_genLabel);
+        gr.AddChild(UiTheme.Button("▶ Reproducir evolución", () => { _gaPlaying = true; _gaPlayT = 0; _gen.SetValueNoSignal(0); RefreshGa(); }, "Animar la corrida desde la generación 0"));
         left.AddChild(gr);
         _gaInfo = new RichTextLabel { BbcodeEnabled = true, SizeFlagsVertical = Control.SizeFlags.ExpandFill };
         left.AddChild(_gaInfo);
@@ -546,7 +621,7 @@ public partial class Labs : CanvasLayer
             _gaRun.AddItem($"#{i + 1} · {g.Trigger} · ({g.Start.Y},{g.Start.X})→({g.Goal.Y},{g.Goal.X}) · {g.Generations} gen");
         }
         if (Mission.GaHistory.Count > 0) _gaRun.Selected = Mission.GaHistory.Count - 1;
-        _gen.Value = Math.Min(5, Mission.GaHistory.LastOrDefault()?.History.Count - 1 ?? 0);   // CA-04: generación 5
+        _gen.SetValueNoSignal(Math.Min(5, Mission.GaHistory.LastOrDefault()?.History.Count - 1 ?? 0));   // CA-04: generación 5
     }
 
     private void RefreshGa()
@@ -619,7 +694,7 @@ public partial class Labs : CanvasLayer
     {
         var page = V(8);
         page.Name = "Comparación de políticas";
-        _tabs.AddChild(page);
+        AddWindow("lab_policies", "COMPARACIÓN DE POLÍTICAS · 20 semillas × ablaciones", page, new Rect2(300, 80, 760, 470), false);
         page.AddChild(UiTheme.Label("Experimento controlado (RF-14, RF-15, CA-08): mismas 20 semillas y configuración para el híbrido, tres ablaciones, AG puro y control de menor distancia.", 12, UiTheme.Accent));
         var h = H(8);
         _benchBtn = UiTheme.Button("▶ Ejecutar 20 semillas × 6 políticas (planeta actual)", RunBench);
@@ -703,8 +778,8 @@ public partial class Labs : CanvasLayer
     // ------------------------------------------------------------------ ayuda
     private void BuildHelp()
     {
-        _help = new RichTextLabel { BbcodeEnabled = true, Name = "Ayuda y supuestos" };
-        _tabs.AddChild(_help);
+        _help = new RichTextLabel { BbcodeEnabled = true, Name = "Ayuda y supuestos", CustomMinimumSize = new Vector2(640, 420) };
+        AddWindow("lab_help", "AYUDA Y SUPUESTOS", _help, new Rect2(320, 100, 720, 470), false);
         _help.Text = """
 [font_size=16][color=#ffd860]Controles[/color][/font_size]
 [b]Clic izquierdo en el terreno[/b] (o en el mapa 2D): asignar destino. El rover primero [b]evalúa el destino[/b] con lo que cree del mapa (ruta estimada, energía de ida y de regreso al refugio con margen ×1,25, riesgo de la RNA, terreno sin observar, pendiente, temperatura, viento, hora de la puesta de sol) y da un veredicto: VIABLE · CON RIESGO · SOLO IDA · ENERGÍA INSUFICIENTE · INALCANZABLE. Luego navega: [b]cada paso[/b] dispara el ciclo completo (sensores → validación → RNA → AG si hay bloqueo → difuso → supervisor → física). Si el supervisor veta, el rover se detiene, marca la zona y replanifica.
@@ -732,6 +807,28 @@ Referencias: NASA Planetary Fact Sheet, NASA Science (Solar System Temperatures,
 
     public override void _Process(double delta)
     {
+        _sinceRefresh += delta;
+        if (_dirty && _sinceRefresh >= 0.25 && Mission != null)
+        {
+            _dirty = false;
+            _sinceRefresh = 0;
+            foreach (var id in new[] { "lab_rna", "lab_fuzzy", "lab_ga" })
+                if (Live(id)) RefreshWindow(id, false);
+        }
+        if (_gaPlaying && _wins["lab_ga"].Visible)
+        {
+            _gaPlayT += delta;
+            if (_gaPlayT >= 0.07)
+            {
+                _gaPlayT = 0;
+                if (_gen.Value < _gen.MaxValue)
+                {
+                    _gen.SetValueNoSignal(_gen.Value + 1);
+                    RefreshGa();
+                }
+                else _gaPlaying = false;
+            }
+        }
         while (_benchMsgs.TryDequeue(out var msg))
         {
             if (msg == "__done__")
@@ -746,11 +843,10 @@ Referencias: NASA Planetary Fact Sheet, NASA Science (Solar System Temperatures,
 
     public override void _UnhandledInput(InputEvent e)
     {
-        if (!_root.Visible) return;
-        if (e is InputEventKey { Pressed: true, Echo: false } k)
+        if (e is InputEventKey { Pressed: true, Echo: false, Keycode: Key.Escape } && IsOpen)
         {
-            if (k.Keycode == Key.Escape) { Close(); GetViewport().SetInputAsHandled(); }
-            else if (k.Keycode == Key.Tab) { _tabs.CurrentTab = (_tabs.CurrentTab + 1) % _tabs.GetTabCount(); GetViewport().SetInputAsHandled(); }
+            Close();
+            GetViewport().SetInputAsHandled();
         }
     }
 }

@@ -88,7 +88,9 @@ public partial class Main : Node3D, IGameHost
             _rna = rna;
             _trainDone = true;
         });
-        _labs.Closed = () => { if (_mission != null && !_config.IsShown) Platform.SetUiScale(GetTree(), true); };
+        _labs.OpenedOnMobile = () => _hud.CloseDrawersForLab();
+        _labs.Closed = () => _hud.SetMobileLabOpen(false);
+        _hud.LabWindowsClosing += () => _labs.Close();
         if (Platform.IsMobile) DisplayServer.ScreenSetKeepOn(true);
 
         foreach (var a in _args)
@@ -121,6 +123,7 @@ public partial class Main : Node3D, IGameHost
         var dummy = new Node3D { Position = Grid.CellCenter(map.Start) };
         _worldRoot.AddChild(dummy);
         _cam.Target = dummy;
+        if (_cam.Camera != null) _cam.ConfigureForLarge(false);
         _cam.Zoom = 4f;
         var env = new SimEnvironment(map.Planet, map, new Rng(1), 11);
         _fx.Setup(env, map.Planet);
@@ -131,25 +134,29 @@ public partial class Main : Node3D, IGameHost
     private void StartMission(MissionConfig cfg)
     {
         if (_rna == null) return;
+        if (cfg.Scenario is { IsScenario: false } meta) cfg.Scenario = Scenarios.Load(meta.Id);   // grillas a escala real
         foreach (var c in _worldRoot.GetChildren()) c.QueueFree();
         _mission = new Mission(cfg, _rna);
         Grid.Map = _mission.Map;
         _terrain = new TerrainView { Name = "Terrain" };
         _props = new PropsView { Name = "Props" };
         _overlay = new OverlayView { Name = "Overlay", Mission = _mission, ShowRisk = _showRisk, ShowTruth = _showTruth, ShowCandidates = _showCand };
-        _robot = new RobotView { Name = "Robot", Probe = cfg.Probe };
+        _robot = new RobotView { Name = "Robot", Probe = cfg.Probe, Heli = cfg.Heli };
         _worldRoot.AddChild(_terrain);
         _worldRoot.AddChild(_props);
         _worldRoot.AddChild(_overlay);
         _worldRoot.AddChild(_robot);
+        _worldRoot.AddChild(new DroneView { Name = "Drone", Mission = _mission, Rover = _robot });
         _overlay.Reset();
         _robot.Place(_mission.Rover.Pos);
         _cam.Target = _robot;
-        _cam.Zoom = 1.5f;
+        _cam.ConfigureForLarge(Grid.Large);
+        _cam.Zoom = Grid.Large ? 3f : 1.5f;
         _cam.Snap();
         _fx.Setup(_mission.Env, _mission.Planet);
         _fx.Follow = _robot;
         _hud.Bind(_mission);
+        _hud.CallDeferred(Hud.MethodName.InitLayout);
         _hud.ShowUi(true);
         _hud.UpdateToggles(_showRisk, _showTruth);
         _labs.Mission = _mission;
@@ -195,6 +202,7 @@ public partial class Main : Node3D, IGameHost
             if (l.Text.Contains("SISMO") || l.Text.StartsWith("Sismo espontáneo")) _cam.Shake(0.45f, 1.2f);
         }
         _hud.OnStep();
+        _labs.NotifyStep();
         if (_mission.Finished) Running = false;
     }
 
@@ -206,10 +214,13 @@ public partial class Main : Node3D, IGameHost
             _config.TrainDone(_rna);
             if (_args.Contains("--autostart")) AutoStart();
             else if (_shotPath != null) _shotWait = 30;
+            foreach (var a in _args)
+                if (a.StartsWith("--config-scenario=")) _config.SelectScenario(a[18..]);
         }
         if (_mission == null || _robot == null) { HandleShot(); return; }
         if (_overlay != null) _overlay.RobotPos = _robot.GlobalPosition;
-        if (_labs.IsOpen || _config.IsShown) { HandleShot(); return; }
+        _robot.HeliAglM = _mission.HeliAglM;
+        if (_config.IsShown) { HandleShot(); return; }
 
         if (!OS.HasFeature("mobile")) UpdateHover();
         if (Platform.IsMobile) UpdateTouch();
@@ -271,7 +282,7 @@ public partial class Main : Node3D, IGameHost
         if (_mission == null || _overlay == null) return;
         var mouse = GetViewport().GetMousePosition();
         bool overUi = GetViewport().GuiGetHoveredControl() != null;
-        Cell? c = overUi || _labs.IsOpen ? null : PickCell(mouse);
+        Cell? c = overUi ? null : PickCell(mouse);
         _overlay.HoverCell = c;
         if (c != _hoverCell)
         {
@@ -289,7 +300,7 @@ public partial class Main : Node3D, IGameHost
         string known = b.ConfirmedCliff[i] ? "BARRANCO CONFIRMADO" : b.ConfirmedObstacle[i] ? "OBSTÁCULO CONFIRMADO" : b.Vetoed[i] ? "VETADA" : b.Observed[i] ? $"riesgo RNA {b.Risk(c):0.00}" : "no observada (estimación orbital)";
         var site = m.Map.Sites.FirstOrDefault(s => s.Cell == c);
         string extra = site != null ? $"\n★ {site.Name} · {site.Kind} · valor {site.Value:0.00}{(site.Visited ? " · ✓" : "")}" : m.Map.Refuges.Contains(c) ? "\n⌂ refugio (recarga)" : "";
-        return $"({c.Y},{c.X}) · {c.Dist(m.Rover.Pos) * WorldMap.CellM:0} m en línea recta\n" +
+        return $"({c.Y},{c.X}) · {c.Dist(m.Rover.Pos) * m.Map.CellM:0} m en línea recta\n" +
                $"elev. est. {m.Map.BaseElevation + b.HeightEst[i]:0} m · pend. est. {b.SlopeEst[i]:0}° · {known}\n" +
                $"T {m.Env.TempAt(c):0} °C · {(b.Observed[i] ? WorldMap.SoilName(m.Map.SoilAt(c)) : "suelo desconocido")}{extra}\n" +
                (OS.HasFeature("mobile") ? $"[toque] {ToolName} · mantener = ver celda" : "[clic] ir aquí · [clic der.] cancelar · Mayús/Ctrl/Alt+clic: barranco/roca/despejar");
@@ -378,9 +389,7 @@ public partial class Main : Node3D, IGameHost
     public void OpenLab(int tab)
     {
         if (_mission == null) return;
-        Running = false;
-        Platform.SetUiScale(GetTree(), false);
-        _labs.Open(tab);
+        _labs.Open(tab);   // ventana flotante en vivo: la simulación sigue corriendo
     }
 
     public void MapEdit(Cell c, string what)
@@ -408,9 +417,9 @@ public partial class Main : Node3D, IGameHost
 
     // ------------------------------------------------------------------ entrada
     // ------------------------------------------------------------------ táctil (Android)
-    private enum Tool { Destino, Barranco, Roca, Despejar }
+    private enum Tool { Destino, Barranco, Roca, Despejar, Dron }
     private Tool _tool = Tool.Destino;
-    private string ToolName => _tool switch { Tool.Barranco => "barranco", Tool.Roca => "roca", Tool.Despejar => "despejar", _ => "destino" };
+    private string ToolName => _tool switch { Tool.Barranco => "barranco", Tool.Roca => "roca", Tool.Despejar => "despejar", Tool.Dron => "dron", _ => "destino" };
     private readonly System.Collections.Generic.Dictionary<int, Vector2> _touches = new();
     private Vector2 _tapPos;
     private double _tapTime, _hoverHideAt;
@@ -419,11 +428,41 @@ public partial class Main : Node3D, IGameHost
 
     public string CycleTool()
     {
-        _tool = (Tool)(((int)_tool + 1) % 4);
+        _tool = (Tool)(((int)_tool + 1) % 5);
         return ToolName;
     }
 
     public void CancelDestination() => _mission?.CancelDestination();
+
+    /// <summary>Muestra/oculta una ventana (HUD o laboratorio). En móvil las del HUD son cajones.</summary>
+    public void ToggleWindow(string id)
+    {
+        if (id.StartsWith("lab_")) _labs.Toggle(id);
+        else if (Platform.IsMobile) _hud.ToggleDrawerFor(id);
+        else WindowManager.Toggle(id);
+    }
+    /// <summary>D / botón: despliega el dron (a la celda bajo el cursor o a la zona más incierta) o, en vuelo, lo hace volver.</summary>
+    public void DroneAction()
+    {
+        if (_mission == null) return;
+        if (_mission.Drone.Flying) { _mission.RecallDrone(); return; }
+        DeployDroneTo(_hoverCell);
+    }
+
+    private void DeployDroneTo(Cell? c)
+    {
+        if (_mission == null) return;
+        if (_mission.Drone.Flying) { _hud.Flash("El dron ya está en vuelo: " + DroneState.ModeName(_mission.Drone.Mode), UiTheme.Warn, 3); return; }
+        if (!_mission.DeployDrone(c, "operador")) _hud.Flash(_mission.Drone.LastDecision, UiTheme.Warn, 4);
+    }
+
+    public void ToggleDroneAuto()
+    {
+        if (_mission == null) return;
+        _mission.Drone.Auto = !_mission.Drone.Auto;
+        _hud.Flash(_mission.Drone.Auto ? "Dron: despliegue automático por lógica difusa ACTIVADO" : "Dron: despliegue automático desactivado (manual con D)", UiTheme.Accent, 3);
+    }
+
     public void RotateCam(int dir) => _cam.Rotate45(dir);
     public void ZoomCam(int step) => _cam.Wheel(step);
 
@@ -437,6 +476,7 @@ public partial class Main : Node3D, IGameHost
             case Tool.Barranco: _mission.EditMap(c, "cliff"); break;
             case Tool.Roca: _mission.EditMap(c, "rock"); break;
             case Tool.Despejar: _mission.EditMap(c, "clear"); break;
+            case Tool.Dron: DeployDroneTo(c); break;
             default: AssignDestination(c); break;
         }
     }
@@ -510,13 +550,13 @@ public partial class Main : Node3D, IGameHost
 
     public override void _UnhandledInput(InputEvent e)
     {
-        if (OS.HasFeature("mobile") && _mission != null && !_labs.IsOpen && !_config.IsShown)
+        if (OS.HasFeature("mobile") && _mission != null && !_config.IsShown)
         {
             if (e is InputEventScreenTouch st) { HandleTouch(st); return; }
             if (e is InputEventScreenDrag sd) { HandleDrag(sd); return; }
             if (e is InputEventMouseButton) return;   // ratón emulado desde el toque: ya lo manejamos arriba
         }
-        if (e is InputEventMouseButton { Pressed: true } mb && _mission != null && !_labs.IsOpen && !_config.IsShown)
+        if (e is InputEventMouseButton { Pressed: true } mb && _mission != null && !_config.IsShown)
         {
             if (mb.ButtonIndex == MouseButton.WheelUp) _cam.Wheel(-1);
             if (mb.ButtonIndex == MouseButton.WheelDown) _cam.Wheel(1);
@@ -530,7 +570,7 @@ public partial class Main : Node3D, IGameHost
                 GetViewport().SetInputAsHandled();
             }
         }
-        if (e is not InputEventKey { Pressed: true, Echo: false } k || _mission == null || _config.IsShown || _labs.IsOpen) return;
+        if (e is not InputEventKey { Pressed: true, Echo: false } k || _mission == null || _config.IsShown) return;
         bool handled = true;
         if (k.PhysicalKeycode == Key.Enter && k.AltPressed)
         {
@@ -543,6 +583,7 @@ public partial class Main : Node3D, IGameHost
         {
             case Key.Space: TogglePlay(); break;
             case Key.N: StepOnce(); break;
+            case Key.D: DroneAction(); break;
             case Key.R: Restart(); break;
             case Key.M: ToggleMode(); break;
             case Key.P: Replan(); break;
@@ -552,7 +593,7 @@ public partial class Main : Node3D, IGameHost
                 _showCand = !_showCand;
                 if (_overlay != null) _overlay.ShowCandidates = _showCand;
                 break;
-            case Key.Tab: OpenLab(0); break;
+            case Key.Tab: ToggleWindow("lab_rna"); break;
             case Key.H: OpenLab(4); break;
             case Key.Key1: SetSpeed(1); break;
             case Key.Key2: SetSpeed(2); break;
@@ -586,18 +627,29 @@ public partial class Main : Node3D, IGameHost
             if (a.StartsWith("--planet=")) cfg.PlanetId = a[9..];
             if (a.StartsWith("--seed=")) cfg.Seed = a[7..].ToInt();
             if (a == "--mode=auto") cfg.Mode = MissionMode.Autonomo;
+            if (a == "--heli") cfg.Heli = true;
             if (a.StartsWith("--battery=")) cfg.BatteryPct = a[10..].ToFloat();
+            if (a.StartsWith("--scenario=")) { cfg.PlanetId = "tierra"; cfg.Scenario = Scenarios.Load(a[11..]); }
         }
-        cfg.Probe = !PlanetProfile.Get(cfg.PlanetId).SolidSurface;
+        cfg.Probe = !PlanetProfile.Get(cfg.PlanetId).SolidSurface && !cfg.Heli;
         StartMission(cfg);
         foreach (var a in _args)
         {
             if (a.StartsWith("--event=") && Enum.TryParse<EventKind>(a[8..], out var ev)) Inject(ev);
             if (a.StartsWith("--dest=")) { var xy = a[7..].Split(','); AssignDestination(new Cell(xy[0].ToInt(), xy[1].ToInt())); }
+            if (a.StartsWith("--drone=")) { var xy = a[8..].Split(','); _mission?.DeployDrone(xy.Length == 2 ? new Cell(xy[0].ToInt(), xy[1].ToInt()) : null, "operador"); }
         }
         if (_autoSteps > 0) Running = false;   // captura: exactamente N pasos
         foreach (var a in _args)
             if (a.StartsWith("--drawer=")) _hud.OpenDrawer(a[9..].ToInt());
+        foreach (var a in _args)
+            if (a.StartsWith("--preset="))
+            {
+                string preset = a[9..];
+                Callable.From(() => { _hud.InitLayout(); WindowManager.ApplyPreset(preset, _hud.UiSize); _hud.RefreshWindowButtons(); }).CallDeferred();
+            }
+        foreach (var a in _args)
+            if (a.StartsWith("--zoom=")) { _cam.Zoom = a[7..].ToFloat(); _cam.Snap(); }
         SimSpeed = 8;
         if (_autoSteps == 0) _shotWait = 40;
     }

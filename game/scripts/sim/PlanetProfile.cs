@@ -71,8 +71,8 @@ public sealed class PlanetProfile
         },
         new PlanetProfile
         {
-            Id = "tierra", Name = "Tierra · GeoClick Santiago", Style = TerrainStyle.Tierra,
-            Summary = "Banco de calibración: lluvia, sismos y remociones en masa. Relieve y clima de la consulta GeoClick 40e9efb1.",
+            Id = "tierra", Name = "Tierra · GeoClick", Style = TerrainStyle.Tierra,
+            Summary = "Banco de calibración: lluvia, sismos y remociones en masa. Terreno procedural calibrado con GeoClick 40e9efb1 o escenarios a escala real convertidos de informes GeoClick (DEM 30 m, cobertura, clima).",
             Gravity = 9.81f, DayHours = 24, TempMeanC = 14.7f, TempAmpC = 7.5f, PressureBar = 0.946f, ScaleHeightKm = 8.5f,
             AirDensity = 1.12f, O2Pct = 20.95f, CO2Pct = 0.042f, N2Pct = 78.08f, ArPct = 0.93f, WindMean = 3f, WindGust = 9f,
             SolarTopWm2 = 1361, SurfaceSolarFactor = 0.75f, RadiationMsvH = 0.0001f, LightTimeMin = 0f,
@@ -120,48 +120,8 @@ public sealed class PlanetProfile
     public static PlanetProfile Get(string id) => All.Find(p => p.Id == id) ?? All[3];
 }
 
-/// <summary>
-/// Calibración terrestre tomada de la consulta GeoClick 40e9efb1 (07-11-2026). Se usa para generar el relieve, la
-/// cobertura de suelo y el régimen de lluvias del perfil Tierra.
-/// </summary>
 public static class GeoClick
 {
-    public const string Consulta = "GeoClick 40e9efb1 · 8,2 km² · Santiago (33,42° S 70,62° O)";
-    public const float ElevMin = 525, ElevMax = 880, ElevMedian = 616, SlopeMedian = 6.7f;
-
-    /// <summary>Distribución de pendientes (fracción del área): 0–5, 5–15, 15–25, 25–35, &gt;35°.</summary>
-    public static readonly float[] SlopeBins = { 0.43f, 0.23f, 0.19f, 0.15f, 0.01f };
-    public static readonly string[] SlopeLabels = { "0–5°", "5–15°", "15–25°", "25–35°", ">35°" };
-
-    /// <summary>Cobertura ESA WorldCover: urbano, bosque, matorral, suelo desnudo, pastizal, agua, cultivos.</summary>
-    public static readonly float[] Cover = { 0.51f, 0.30f, 0.13f, 0.03f, 0.02f, 0.003f, 0.001f };
-
-    /// <summary>Precipitación media mensual (mm), Ene..Dic (ERA5 1981–2026).</summary>
-    public static readonly float[] MonthlyRainMm = { 4.1f, 4.4f, 8.5f, 23.7f, 65.3f, 102.6f, 92.3f, 88.5f, 58.1f, 34.2f, 14.2f, 5.3f };
-
-    /// <summary>Temperatura media mensual aproximada (°C), Ene..Dic (figura 10 del informe).</summary>
-    public static readonly float[] MonthlyTempC = { 22.0f, 21.3f, 19.0f, 15.5f, 12.0f, 10.0f, 9.6f, 10.8f, 12.8f, 15.6f, 18.4f, 21.0f };
-
-    /// <summary>Periodos de retorno de Gumbel: (años, lluvia en un día mm).</summary>
-    public static readonly (int Years, float Mm)[] ReturnPeriods = { (2, 49.2f), (5, 67.8f), (10, 80.1f), (25, 95.7f), (50, 107.2f), (100, 118.7f) };
-
-    public const float AnnualRainMm = 488f, MaxDailyMm = 129.9f, FrostDaysYear = 17.8f, ScarsHa = 0.8f;
-
     public static string MonthName(int m) =>
         new[] { "Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic" }[(m - 1 + 12) % 12];
-
-    /// <summary>Periodo de retorno aproximado (años) de una lluvia diaria, interpolando la tabla de Gumbel.</summary>
-    public static float ReturnYears(float dailyMm)
-    {
-        if (dailyMm < ReturnPeriods[0].Mm)
-            return dailyMm / ReturnPeriods[0].Mm * 2f;
-        for (int i = 1; i < ReturnPeriods.Length; i++)
-            if (dailyMm <= ReturnPeriods[i].Mm)
-            {
-                var (y0, m0) = ReturnPeriods[i - 1];
-                var (y1, m1) = ReturnPeriods[i];
-                return y0 + (y1 - y0) * (dailyMm - m0) / (m1 - m0);
-            }
-        return 100f + (dailyMm - 118.7f) * 5f;
-    }
 }

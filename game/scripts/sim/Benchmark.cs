@@ -34,27 +34,28 @@ public sealed class PolicyStats
 /// </summary>
 public static class Benchmark
 {
-    public static readonly (string Name, bool Rna, bool Fuzzy, bool Ga)[] Policies =
+    public static readonly (string Name, bool Rna, bool Fuzzy, bool Ga, bool Drone)[] Policies =
     {
-        ("Híbrido completo", true, true, true),
-        ("Sin RNA", false, true, true),
-        ("Sin difuso", true, false, true),
-        ("Sin AG", true, true, false),
-        ("AG puro", false, false, true),
-        ("Control (menor distancia)", false, false, false),
+        ("Híbrido completo", true, true, true, true),
+        ("Híbrido sin dron", true, true, true, false),
+        ("Sin RNA", false, true, true, true),
+        ("Sin difuso", true, false, true, true),
+        ("Sin AG", true, true, false, true),
+        ("AG puro", false, false, true, false),
+        ("Control (menor distancia)", false, false, false, false),
     };
 
     public static readonly string[] Keys =
     {
         "exito", "colisiones", "caidas", "barrancos_evitados", "energia_restante_pct", "distancia_m", "ciencia", "replanificaciones",
-        "violaciones_seguridad", "pasos", "ms_decision_medio", "ms_ag_total",
+        "violaciones_seguridad", "pasos", "ms_decision_medio", "ms_ag_total", "vetos", "despliegues_dron", "objetivos_dron",
     };
 
     public static List<PolicyStats> Run(MissionConfig baseCfg, int seeds, NeuralPerception rna, Action<string>? progress = null,
         Func<bool>? cancel = null, int maxSteps = 500)
     {
         var all = new List<PolicyStats>();
-        foreach (var (name, r, f, g) in Policies)
+        foreach (var (name, r, f, g, dr) in Policies)
         {
             var ps = new PolicyStats { Policy = name };
             for (int s = 0; s < seeds; s++)
@@ -64,7 +65,7 @@ public static class Benchmark
                 {
                     PlanetId = baseCfg.PlanetId, Probe = baseCfg.Probe, Difficulty = baseCfg.Difficulty, Seed = 1000 + s,
                     BatteryPct = baseCfg.BatteryPct, ScienceWeight = baseCfg.ScienceWeight, Month = baseCfg.Month,
-                    UseRna = r, UseFuzzy = f, UseGa = g, Mode = MissionMode.Autonomo, MaxSteps = maxSteps, Ga = baseCfg.Ga,
+                    UseRna = r, UseFuzzy = f, UseGa = g, UseDrone = dr, Mode = MissionMode.Autonomo, MaxSteps = maxSteps, Ga = baseCfg.Ga,
                 };
                 var m = new Mission(cfg, rna);
                 while (!m.Finished) m.Step();

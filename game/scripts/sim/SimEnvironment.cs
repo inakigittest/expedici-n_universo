@@ -65,7 +65,7 @@ public sealed class SimEnvironment
         WindSpeed = p.WindMean;
         WindDirDeg = rng.Range(0, 360);
         DustOpacity = p.DustBase;
-        SoilMoisture = p.HasRain ? MathX.Clamp01(GeoClick.MonthlyRainMm[(month - 1) % 12] / 120f) : 0;
+        SoilMoisture = p.HasRain ? MathX.Clamp01(_map.Geo.MonthlyRainMm[(month - 1) % 12] / MathF.Max(120f, 0.6f * _map.Geo.MonthlyRainMm.Max() + 60f)) : 0;   // relativo al clima del lugar
         UpdateDerived();
     }
 
@@ -99,7 +99,7 @@ public sealed class SimEnvironment
         // lluvia (solo Tierra): cadena de Markov con probabilidad según la lluvia media del mes (GeoClick)
         if (P.HasRain)
         {
-            float monthly = GeoClick.MonthlyRainMm[(Month - 1) % 12];
+            float monthly = _map.Geo.MonthlyRainMm[(Month - 1) % 12];
             var storm = Get(EventKind.Tormenta);
             if (storm != null)
                 RainMmH = MathX.Lerp(RainMmH, storm.Severity * 18f + 4f, MathF.Min(1, dt / 90f));
@@ -184,13 +184,16 @@ public sealed class SimEnvironment
     /// <summary>Temperatura exterior (°C) en una celda: media + ciclo diario + gradiente térmico con la altura.</summary>
     public float TempAt(Cell c)
     {
-        float mean = P.Style == TerrainStyle.Tierra ? GeoClick.MonthlyTempC[(Month - 1) % 12] : P.TempMeanC;
+        float mean = P.Style == TerrainStyle.Tierra ? _map.Geo.MonthlyTempC[(Month - 1) % 12] : P.TempMeanC;
         float amp = P.TempAmpC * (1f - 0.6f * DustOpacity) * (1f - 0.5f * CloudCover * (P.HasRain ? 1 : 0));
         float diurnal = ForcedNight ? -1f : SunElev > 0 ? SunElev : SunElev * 0.8f;
         if (P.Style == TerrainStyle.Mercurio)
             diurnal = SunElev > 0 ? MathF.Pow(SunElev, 0.5f) : -1f;   // sin atmósfera: cambio brusco en el terminador
         float lapse = P.Style switch { TerrainStyle.Tierra => 0.0065f, TerrainStyle.Marte => 0.0025f, TerrainStyle.Venus => 0.008f, _ => 0f };
-        float t = mean + amp * diurnal - lapse * _map.Height(c);
+        // Tierra: la media mensual del informe (ERA5, punto central) corresponde a la elevación mediana del área
+        float t = P.Style == TerrainStyle.Tierra
+            ? mean + amp * diurnal - lapse * (_map.Elevation(c) - _map.Geo.ElevMedian)
+            : mean + amp * diurnal - lapse * _map.Height(c);
         if (P.Style == TerrainStyle.Tierra && RainMmH > 0) t -= 2f;
         return t;
     }
@@ -208,7 +211,7 @@ public sealed class SimEnvironment
     {
         if (P.ScaleHeightKm <= 0) return P.PressureBar;
         float hKm = (_map.Height(c) - 20f) / 1000f;
-        if (P.Style == TerrainStyle.Tierra) hKm = (_map.Elevation(c) - GeoClick.ElevMedian) / 1000f;
+        if (P.Style == TerrainStyle.Tierra) return 1.01325f * MathF.Exp(-_map.Elevation(c) / 1000f / P.ScaleHeightKm);   // atmósfera estándar desde el nivel del mar
         return P.PressureBar * MathF.Exp(-hKm / P.ScaleHeightKm);
     }
 

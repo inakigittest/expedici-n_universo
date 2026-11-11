@@ -12,7 +12,8 @@ public partial class ConfigScreen : CanvasLayer
     public Action<MissionConfig>? Start;
     public MissionConfig Config = new();
 
-    private OptionButton _planet = null!, _mode = null!, _diff = null!, _month = null!, _control = null!;
+    private OptionButton _planet = null!, _mode = null!, _diff = null!, _month = null!, _control = null!, _terrain = null!;
+    private Label _terrainLabel = null!;
     private SpinBox _seed = null!;
     private HSlider _battery = null!, _science = null!;
     private Label _batteryVal = null!, _scienceVal = null!, _validation = null!;
@@ -63,8 +64,15 @@ public partial class ConfigScreen : CanvasLayer
         _mode = new OptionButton();
         _mode.AddItem("Rover de ruedas (superficie)");
         _mode.AddItem("Sonda atmosférica / aerostato virtual");
+        _mode.AddItem("Helicóptero no tripulado (solo Tierra)");
         _mode.ItemSelected += _ => Refresh();
         Row("Modo", _mode);
+        _terrain = new OptionButton { ClipText = true, TooltipText = "Escenarios a escala real convertidos desde informes GeoClick (DEM GLO-30 30 m, ESA WorldCover, Sentinel-2, ERA5)" };
+        _terrain.AddItem("Procedural 200 m (calibrado con GeoClick 40e9efb1)");
+        foreach (var g in Core.Scenarios.All) _terrain.AddItem($"GeoClick {g.Title}");
+        _terrain.ItemSelected += _ => { FillMonths(); Refresh(); };
+        Row("Terreno (Tierra)", _terrain);
+        _terrainLabel = (Label)form.GetChild(form.GetChildCount() - 2);
         _diff = new OptionButton();
         _diff.AddItem("Fácil (pocos obstáculos, 4 sitios)");
         _diff.AddItem("Normal (5 sitios)");
@@ -81,7 +89,7 @@ public partial class ConfigScreen : CanvasLayer
         (_science, _scienceVal) = Slider(0, 3, 1, v => $"×{v:0.0}");
         Row("Prioridad científica", Pair(_science, _scienceVal));
         _month = new OptionButton();
-        for (int m = 1; m <= 12; m++) _month.AddItem($"{GeoClick.MonthName(m)} · lluvia media {GeoClick.MonthlyRainMm[m - 1]:0} mm");
+        FillMonths();
         _month.Selected = 10;
         Row("Mes (clima Tierra)", _month);
         var abl = new VBoxContainer();
@@ -121,6 +129,17 @@ public partial class ConfigScreen : CanvasLayer
         bottom.AddChild(_startBtn);
         outer.AddChild(bottom);
         Refresh();
+    }
+
+    private GeoReport? SelectedScenario => _terrain.Selected > 0 && _terrain.Selected - 1 < Core.Scenarios.All.Count ? Core.Scenarios.All[_terrain.Selected - 1] : null;
+    private GeoReport Geo => SelectedScenario ?? GeoReport.Santiago;
+
+    private void FillMonths()
+    {
+        int sel = Math.Max(0, _month.Selected);
+        _month.Clear();
+        for (int m = 1; m <= 12; m++) _month.AddItem($"{GeoClick.MonthName(m)} · lluvia media {Geo.MonthlyRainMm[m - 1]:0} mm · {Geo.MonthlyTempC[m - 1]:0} °C");
+        _month.Selected = sel;
     }
 
     private static (HSlider, Label) Slider(float min, float max, float val, Func<float, string> fmt)
@@ -165,6 +184,7 @@ public partial class ConfigScreen : CanvasLayer
     {
         PlanetId = PlanetProfile.All[_planet.Selected].Id,
         Probe = _mode.Selected == 1,
+        Heli = _mode.Selected == 2,
         Difficulty = _diff.Selected,
         Seed = (int)_seed.Value,
         BatteryPct = (float)_battery.Value,
@@ -174,7 +194,19 @@ public partial class ConfigScreen : CanvasLayer
         UseFuzzy = _fuzzy.ButtonPressed,
         UseGa = _ga.ButtonPressed,
         Mode = _control.Selected == 0 ? MissionMode.Destino : MissionMode.Autonomo,
+        Scenario = PlanetProfile.All[_planet.Selected].Style == TerrainStyle.Tierra && _mode.Selected != 1 ? SelectedScenario : null,
     };
+
+    /// <summary>Selecciona un escenario por id (captura automática).</summary>
+    public void SelectScenario(string id)
+    {
+        _planet.Selected = PlanetProfile.All.FindIndex(p => p.Id == "tierra");
+        _mode.Selected = 0;
+        for (int i = 0; i < Core.Scenarios.All.Count; i++)
+            if (Core.Scenarios.All[i].Id == id) _terrain.Selected = i + 1;
+        FillMonths();
+        Refresh();
+    }
 
     private void Refresh()
     {
@@ -190,10 +222,22 @@ public partial class ConfigScreen : CanvasLayer
         string gas = p.SolidSurface
             ? $"O₂ {p.O2Pct:0.###} % · CO₂ {p.CO2Pct:0.###} % · N₂ {p.N2Pct:0.#} % · SO₂ {p.SO2Ppm:0} ppm"
             : $"H₂ {p.H2Pct:0.#} % · He {p.HePct:0.#} % · CH₄ {p.CH4Pct:0.#} %";
-        string earth = p.Style == TerrainStyle.Tierra
-            ? $"\n[color=#5ab0ff]Calibración {GeoClick.Consulta}[/color]\nPendientes GeoClick: {string.Join(" · ", GeoClick.SlopeLabels.Zip(GeoClick.SlopeBins, (l, b) => $"{l} {b:P0}"))}\n" +
-              $"Lluvia normal {GeoClick.AnnualRainMm} mm/año · retorno 1 día: {string.Join(", ", GeoClick.ReturnPeriods.Select(r => $"T{r.Years}={r.Mm} mm"))}\nMes elegido: {GeoClick.MonthName(cfg.Month)} · {GeoClick.MonthlyRainMm[cfg.Month - 1]} mm · T media {GeoClick.MonthlyTempC[cfg.Month - 1]} °C"
-            : "";
+        bool earthRover = p.Style == TerrainStyle.Tierra && _mode.Selected != 1;
+        _terrain.Visible = _terrainLabel.Visible = earthRover;
+        var geo = Geo;
+        var sc = earthRover ? SelectedScenario : null;
+        string earth = p.Style != TerrainStyle.Tierra ? "" :
+            (sc != null
+                ? $"\n[color=#5ab0ff]ESCENARIO A ESCALA REAL · {geo.Consulta}[/color]\n" +
+                  $"{sc.N}×{sc.N} celdas de {sc.CellM:0} m · {sc.WidthM / 1000:0.0} × {sc.HeightM / 1000:0.0} km · periodo {geo.Period}\n" +
+                  $"Elevación {geo.ElevMin:0}–{geo.ElevMax:0} m (mediana {geo.ElevMedian:0}) · pendiente mediana {geo.SlopeMedian:0.0}° · {geo.Km2Over25:0.0} km² sobre 25°\n" +
+                  $"Cobertura: {string.Join(" · ", geo.Cover.OrderByDescending(kv => kv.Value).Take(5).Select(kv => $"{kv.Key} {kv.Value / MathF.Max(0.01f, geo.AreaKm2):P0}"))}\n" +
+                  $"Agua {geo.WaterKm2:0.0} km² · cicatrices {geo.ScarsHa:0.#} ha · quemado {geo.BurnedHa:0.#} ha · inundaciones {geo.Floods} · heladas {geo.FrostDaysYear:0.#}/año\n"
+                : $"\n[color=#5ab0ff]Calibración {geo.Consulta}[/color] (mapa procedural de 200 m)\n") +
+            $"Pendientes: {string.Join(" · ", GeoReport.SlopeLabels.Zip(geo.SlopeBins, (l, b) => $"{l} {b:P0}"))}\n" +
+            $"Lluvia normal {geo.AnnualRainMm:0} mm/año · máx. diaria {geo.MaxDailyMm:0.#} mm · retorno 1 día: {string.Join(", ", geo.ReturnPeriods.Select(r => $"T{r.Years}={r.Mm:0.#}"))} mm\n" +
+            $"Mes elegido: {GeoClick.MonthName(cfg.Month)} · {geo.MonthlyRainMm[cfg.Month - 1]:0} mm · T media {geo.MonthlyTempC[cfg.Month - 1]:0.0} °C\n" +
+            "[color=#8a96aa]Datos: Copernicus DEM GLO-30 © DLR/Airbus (ESA), ESA WorldCover 2021 (CC-BY 4.0), Sentinel-2 (Copernicus), ERA5 (Copernicus/ECMWF) vía GeoClick.[/color]";
         _info.Text = $"[font_size=17][color=#ffd860]{p.Name}[/color][/font_size]  [color=#8a96aa]{(p.SolidSurface ? "superficie rocosa" : "sin superficie sólida")}[/color]\n{p.Summary}\n\n" +
             $"[color=#8a96aa]Valores de referencia (aprox., NASA):[/color]\n" +
             $"Gravedad {p.Gravity} m/s² · día solar {p.DayHours:0.#} h · presión {(p.PressureBar < 0.01f ? (p.PressureBar * 1e5f).ToString("0.###") + " Pa" : p.PressureBar.ToString("0.###") + " bar")}\n" +
@@ -201,7 +245,7 @@ public partial class ConfigScreen : CanvasLayer
             $"Irradiancia solar {p.SolarTopWm2:0} W/m² (tope) · radiación ≈ {p.RadiationMsvH} mSv/h · latencia de enlace ≈ {p.LightTimeMin:0.#} min\n\n" +
             $"[color=#8a96aa]Supuestos de simulación:[/color] día comprimido a {p.SimDayMinutes:0} min · tolerancia térmica interna {p.HardwareMinC:0}…{p.HardwareMaxC:0} °C · límite de viento {p.WindLimit:0} m/s" +
             (p.CorrosionPerStep > 0 ? $" · corrosión {p.CorrosionPerStep} %/paso" : "") + "\n" +
-            string.Join("\n", p.Notes.Select(n => "• " + n)) + earth;
+            (sc != null ? "" : string.Join("\n", p.Notes.Select(n => "• " + n))) + earth;
     }
 
     private void TryStart()

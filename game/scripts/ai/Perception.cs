@@ -37,7 +37,7 @@ public static class FeatureModel
     public static float[] Extract(WorldMap map, Cell rover, Cell target, Conditions cond, Rng rng)
     {
         var f = new float[NF];
-        float d = rover.Dist(target) * WorldMap.CellM;
+        float d = rover.Dist(target) * WorldMap.RefCellM;   // distancia en celdas de referencia (escala del entrenamiento)
         float visF = MathX.Clamp01(cond.VisibilityM / 3000f);
         int ti = map.Idx(map.Clamp(target));
         var hz = map.Hazards[ti];
@@ -45,8 +45,8 @@ public static class FeatureModel
         var dir = target - rover;
         var step = new Cell(Math.Sign(dir.X), Math.Sign(dir.Y));
         var prev = map.Clamp(target - step);
-        float edge = map.Height(prev) - map.Height(target);
-        float pit = map.MaxDrop(prev) * 0.25f;
+        float edge = (map.Height(prev) - map.Height(target)) * map.DropScale;   // desnivel equivalente sobre 5 m
+        float pit = map.MaxDrop(prev) * map.DropScale * 0.25f;
         float lidarSigma = 0.25f + 1.4f * (1 - visF) + 0.04f * d;
         f[0] = d + rng.Gauss(0, 0.2f);
         f[1] = MathF.Max(edge, pit * (WorldMap.ClassOf(hz) == TerrainClass.Barranco ? 1.6f : 0.4f)) + rng.Gauss(0, lidarSigma);
@@ -373,6 +373,31 @@ public sealed class BeliefMap
             PriorRisk[i] = r;
             P[i] = new[] { 1 - r, r * 0.5f, r * 0.5f };
             LastSeen[i] = -1;
+        }
+        if (map.IsScenario) ApplyGeoClickPrior(map, rng);
+    }
+
+    /// <summary>
+    /// Escenario GeoClick: el informe ES el conocimiento orbital previo. El DEM de 30 m da pendiente y altura reales;
+    /// ESA WorldCover marca el agua (prohibida desde el inicio) y sube el riesgo a priori de manzanas urbanas, bosque
+    /// denso y cicatrices de remoción. Lo que el informe no resuelve (rocas, árboles o edificios puntuales) lo descubre la RNA.
+    /// </summary>
+    private void ApplyGeoClickPrior(WorldMap map, Rng rng)
+    {
+        var g = map.Geo;
+        for (int i = 0; i < N * N; i++)
+        {
+            SlopeEst[i] = MathF.Max(0, map.Slope[i] + rng.Gauss(0, 1f));
+            HeightEst[i] = map.H[i] + rng.Gauss(0, 0.5f);
+            var soil = map.Soils[i];
+            float obst = soil switch { Soil.Urbano => 0.3f, Soil.Bosque => 0.32f, Soil.Agua => 0.95f, _ => 0.06f };
+            if (((g.Marks?[i] ?? 0) & 1) != 0) obst = MathF.Max(obst, 0.3f);
+            float cliff = MathX.Clamp01((SlopeEst[i] - 25f) / 25f) * 0.6f;
+            float free = MathF.Max(0.02f, 1 - obst - cliff);
+            float sum = free + obst + cliff;
+            P[i] = new[] { free / sum, obst / sum, cliff / sum };
+            PriorRisk[i] = (obst + cliff) / sum;
+            if (soil == Soil.Agua && map.Hazards[i] == Hazard.Water) ConfirmedObstacle[i] = true;   // masas de agua del informe
         }
     }
 

@@ -48,11 +48,13 @@ public sealed class MissionConfig
     public float BatteryPct = 80;
     public float ScienceWeight = 1f;
     public int Month = 11;
-    public bool UseRna = true, UseFuzzy = true, UseGa = true;
+    public bool UseRna = true, UseFuzzy = true, UseGa = true, UseDrone = true;
     public MissionMode Mode = MissionMode.Destino;
     public int MaxSteps = 900;
     public bool ClickMode => Mode == MissionMode.Destino;
     public GaParams Ga = new();
+    public GeoReport? Scenario;           // escenario GeoClick a escala real (solo Tierra)
+    public bool Heli;                     // helicóptero no tripulado (solo Tierra)
 
     public string AblationName => (UseRna, UseFuzzy, UseGa) switch
     {
@@ -63,12 +65,14 @@ public sealed class MissionConfig
         (false, false, true) => "AG puro",
         (false, false, false) => "Control (menor distancia)",
         _ => $"RNA {(UseRna ? 1 : 0)} DIF {(UseFuzzy ? 1 : 0)} AG {(UseGa ? 1 : 0)}",
-    };
+    } + (UseDrone ? "" : " · sin dron");
 
     /// <summary>Validación de compatibilidad planeta/modo (RF-01, CA-07). null = válida.</summary>
     public string? Validate()
     {
         var p = PlanetProfile.Get(PlanetId);
+        if (Heli && p.Style != TerrainStyle.Tierra)
+            return "El helicóptero solo opera en la Tierra: necesita una atmósfera densa (en Marte el aire es ~1 % del terrestre).";
         if (!p.SolidSurface && !Probe)
             return $"{p.Name} no tiene una superficie sólida accesible: un rover de ruedas no puede rodar sobre un gigante gaseoso/helado. " +
                    "Cambie a modo sonda atmosférica (vehículo aerostático virtual).";
@@ -112,7 +116,7 @@ public sealed class LogEntry
 /// acción → física simplificada → bitácora. Un paso = un ciclo observar/decidir/actuar (normalmente, una celda).
 /// No depende de Godot: se puede ejecutar sin ventana (benchmark de semillas y ablaciones).
 /// </summary>
-public sealed class Mission
+public sealed partial class Mission
 {
     public const string Version = "Expedición Universo 1.1 (Godot 4.7 .NET)";
     public readonly MissionConfig Config;
@@ -179,7 +183,7 @@ public sealed class Mission
         Planet = PlanetProfile.Get(cfg.PlanetId);
         Rna = rna;
         var root = new Rng((ulong)cfg.Seed * 1_000_003UL + 12345);
-        Map = new WorldMap(Planet, cfg.Probe, cfg.Seed, cfg.Difficulty);
+        Map = cfg.Scenario != null ? new WorldMap(Planet, cfg.Scenario, cfg.Seed, cfg.Difficulty) : new WorldMap(Planet, cfg.Probe, cfg.Seed, cfg.Difficulty);
         _rngEnv = root.Fork(11);
         _rngSense = root.Fork(12);
         _rngGa = root.Fork(13);
@@ -189,6 +193,7 @@ public sealed class Mission
         Sensors = new SensorSuite(_rngSense);
         Belief = new BeliefMap(Map, root.Fork(16));
         Rover.Probe = cfg.Probe;
+        Rover.CellM = Map.CellM;
         if (cfg.Probe)
         {
             Rover.MassKg = 350;
@@ -197,6 +202,17 @@ public sealed class Mission
             Rover.BaseW = 35;
             Rover.RtgW = 110;   // generador de radioisótopos (SUPUESTO, como las misiones reales a planetas exteriores)
         }
+        else if (Map.IsScenario)
+        {
+            // escenario a escala real (km): vehículo terrestre de campo eléctrico (SUPUESTO, tipo UGV de exploración)
+            Rover.MassKg = 450;
+            Rover.VmaxMs = 2.0f;
+            Rover.CapacityWh = 6000;
+            Rover.BaseW = 120;
+            Rover.PanelM2 = 2.4f;
+            Rover.SampleCapKg = 12f;
+        }
+        InitHeliParams();
         Rover.Pos = Map.Start;
         Rover.EstX = Rover.TrueX;
         Rover.EstY = Rover.TrueY;
@@ -204,7 +220,9 @@ public sealed class Mission
         Rover.TempInt = MathX.Clamp(Env.TempAt(Map.Start) + 15f, Planet.HardwareMinC + 20, Planet.HardwareMaxC - 20);
         if (Planet.Style == TerrainStyle.Venus) Rover.TempInt = 60f;
         StartBatteryWh = Rover.BatteryWh;
+        InitDrone((ulong)cfg.Seed);
         Cost = new CostModel(Belief, Map, Rover);
+        InitHeli();
         Trail.Add(Rover.Pos);
         Belief.ConfirmFree(Rover.Pos);
         Target = Map.Start;
@@ -214,9 +232,10 @@ public sealed class Mission
             TargetName = "sin destino";
             if (cfg.MaxSteps == 900) cfg.MaxSteps = 6000;
         }
-        AddLog("info", $"Misión {Planet.Name} · semilla {cfg.Seed} · {cfg.AblationName} · batería {cfg.BatteryPct:0}% · {(cfg.Probe ? "sonda atmosférica" : "rover de ruedas")} · {(cfg.ClickMode ? "destino por clic del operador" : "misión autónoma (plan del AG)")}");
-        if (Planet.Style == TerrainStyle.Tierra) AddLog("info", $"Perfil calibrado con {GeoClick.Consulta}. {Map.Calibration}");
-        foreach (var n in Planet.Notes) AddLog("info", n);
+        AddLog("info", $"Misión {WorldName} · semilla {cfg.Seed} · {cfg.AblationName} · batería {cfg.BatteryPct:0}% · {(cfg.Probe ? "sonda atmosférica" : cfg.Heli ? "helicóptero no tripulado" : "rover de ruedas")} · {(cfg.ClickMode ? "destino por clic del operador" : "misión autónoma (plan del AG)")}");
+        if (Planet.Style == TerrainStyle.Tierra) AddLog("info", $"{(Map.IsScenario ? "Escenario" : "Perfil calibrado con")} {Map.Geo.Consulta}. {Map.Calibration}");
+        foreach (var n in Map.IsScenario ? ScenarioNotes() : Planet.Notes) AddLog("info", n);
+        if (Heli) foreach (var n in HeliNotes()) AddLog("info", n);
         UpdateRefugeEstimate();
     }
 
@@ -303,7 +322,7 @@ public sealed class Mission
     {
         var r = new DestinationReport { Cell = c, Requested = requested, Adjusted = c != requested, Step = StepCount, Name = TargetName };
         int i = Belief.Idx(c);
-        r.StraightM = Rover.Pos.Dist(c) * WorldMap.CellM;
+        r.StraightM = Rover.Pos.Dist(c) * Map.CellM;
         r.SlopeEst = Belief.SlopeEst[i];
         r.ElevEst = Map.BaseElevation + Belief.HeightEst[i];
         r.TempNow = Env.TempAt(c);
@@ -467,7 +486,7 @@ public sealed class Mission
         if (autonomous && !PendingSample && !Charging)
         {
             if (_needMissionPlan && !click) PlanMission();
-            bool blocked = proposal is Cell nx && (Belief.Forbidden(nx) || MathF.Max(Belief.P[Belief.Idx(nx)][1], Belief.P[Belief.Idx(nx)][2]) > 0.8f);
+            bool blocked = !Heli && proposal is Cell nx && (Belief.Forbidden(nx) || MathF.Max(Belief.P[Belief.Idx(nx)][1], Belief.P[Belief.Idx(nx)][2]) > 0.8f);
             if (blocked) _replanTrigger = $"ruta bloqueada en {proposal}";
             if (_needRoute || blocked || Route.Count == 0 || RouteIdx >= Route.Count - 1 || !Route.Contains(Rover.Pos)) PlanRoute(_replanTrigger);
             proposal = Route.Count > 1 && RouteIdx < Route.Count - 1 ? Route[RouteIdx + 1] : null;
@@ -493,7 +512,7 @@ public sealed class Mission
                 FrontActivations = null;
                 FrontProbs = FeatureModel.RulePredict(FrontFeatures);
             }
-            Belief.Update(front, FrontProbs, Rover.Pos.Dist(front) * WorldMap.CellM, StepCount);
+            Belief.Update(front, FrontProbs, Rover.Pos.Dist(front) * WorldMap.RefCellM, StepCount);
             // sensor determinista de borde: confirma barrancos adyacentes (veto de seguridad)
             if (s.Ok("lidar_drop") && s.V("lidar_drop") > WorldMap.CliffDropM)
             {
@@ -515,7 +534,15 @@ public sealed class Mission
         float distRisk = DistanceToRisk(s, heading);
         float slopeAhead = s.Ok("lidar_grad") ? MathF.Abs(MathF.Atan(s.V("lidar_grad")) * 180f / MathF.PI) : s.Ok("incl_pitch") ? MathF.Abs(s.V("incl_pitch")) : 10f;
         if (Rover.Probe) slopeAhead *= 0.3f;   // en sonda la "pendiente" es cizalla de la capa de nubes
-        float windPct = Planet.AirDensity <= 0 ? 0 : 100f * (s.Ok("gust") ? s.V("gust") : Env.WindGust) / MathF.Max(0.1f, Planet.WindLimit);
+        float windPct = Planet.AirDensity <= 0 ? 0 : 100f * (s.Ok("gust") ? s.V("gust") : Env.WindGust) / MathF.Max(0.1f, Heli ? HeliModel.GustLimitMs : Planet.WindLimit);
+        if (Heli)
+        {
+            // difuso del helicóptero: distancia al relieve que obliga a trepar, gradiente de vuelo y riesgo = margen de potencia
+            UpdateHeliAir();
+            distRisk = HeliTerrainClearance(heading);
+            slopeAhead = HeliClimbDeg = HeliClimbAhead(heading);
+            pHaz = MathX.Clamp01((1.3f - HeliMargin) / 0.4f);
+        }
         var fin = new Dictionary<string, float>
         {
             ["distancia"] = distRisk, ["bateria"] = Rover.BatteryPct, ["pendiente"] = slopeAhead,
@@ -549,6 +576,7 @@ public sealed class Mission
                                                      - (Rover.Probe ? (s.Ok("gust") ? s.V("gust") : Env.WindGust) / 60f : 0) - 0.15f) : 0,
             Daylight = Env.IsDay, SolarW = Rover.SolarW,
             ProposedForbidden = proposal is Cell pf2 && Map.InBounds(pf2) && Belief.Forbidden(pf2), ManualCommand = click,
+            Heli = Heli, PowerMargin = Heli ? HeliMargin : 9f, ClimbDeg = HeliClimbDeg, RainMmH = Env.RainMmH, VisM = s.Ok("vis") ? s.V("vis") : 0,
         };
         var d = LastDecision = SafetySupervisor.Decide(si);
         if (Charging && d.Code is "S-20" or "S-21" or "S-11" or "S-30" or "S-31")
@@ -573,6 +601,8 @@ public sealed class Mission
             d.Explanation = $"{d.Code} · {d.Reason}";
         }
         Execute(d, proposal, click);
+        EvaluateDroneDecision();
+        UpdateDrone(LastStepSeconds);
 
         // --- 6) replanificación si el supervisor vetó (el AG corre en el mismo ciclo, el rover queda detenido)
         if (d.Veto)
@@ -610,7 +640,7 @@ public sealed class Mission
     // ================================================================== percepción
     private void Perceive(Conditions cond)
     {
-        float rangeCells = MathX.Clamp(cond.VisibilityM / WorldMap.CellM, 1.5f, 4.2f);
+        float rangeCells = MathX.Clamp(cond.VisibilityM / Map.CellM, 1.5f, 4.2f);
         if (cond.Night) rangeCells = MathF.Min(rangeCells, 3.2f);   // LIDAR activo: sigue viendo de noche, cámara no
         int r = (int)MathF.Ceiling(rangeCells);
         for (int dy = -r; dy <= r; dy++)
@@ -621,7 +651,7 @@ public sealed class Mission
             if (!Map.InBounds(c) || Rover.Pos.Dist(c) > rangeCells) continue;
             var f = FeatureModel.Extract(Map, Rover.Pos, c, cond, _rngSense);
             var p = UseRna ? Rna!.Predict(f) : FeatureModel.RulePredict(f);
-            Belief.Update(c, p, Rover.Pos.Dist(c) * WorldMap.CellM, StepCount);
+            Belief.Update(c, p, Rover.Pos.Dist(c) * WorldMap.RefCellM, StepCount);
         }
         Belief.ConfirmFree(Rover.Pos);
     }
@@ -635,7 +665,7 @@ public sealed class Mission
             if (!Map.InBounds(c)) break;
             if (Belief.Risk(c) > 0.6f)
             {
-                d = MathF.Min(d, (k - 0.5f) * WorldMap.CellM * (heading.IsDiagonal ? 1.414f : 1));
+                d = MathF.Min(d, (k - 0.5f) * Map.CellM * (heading.IsDiagonal ? 1.414f : 1));
                 break;
             }
         }
@@ -781,17 +811,32 @@ public sealed class Mission
         bool recharge = false, safe = false;
         switch (d.Action)
         {
+            case RoverAction.Avanzar when proposal is Cell to && Heli:
+            {
+                Rover.Dir = to - Rover.Pos;
+                (dt, driveJ, moveM) = HeliFly(to, d.Speed);
+                Rover.LastSpeed = d.Speed;
+                moved = true;
+                Rover.Pos = to;
+                RouteIdx = NextRouteIdx(to);
+                Trail.Add(to);
+                DistanceM += moveM;
+                Rover.OdometerM += moveM;
+                Rover.EstX = Rover.TrueX;   // GNSS a bordo: sin deriva de odometría
+                Rover.EstY = Rover.TrueY;
+                break;
+            }
             case RoverAction.Avanzar when proposal is Cell to:
             {
                 var dir = to - Rover.Pos;
                 Rover.Dir = dir;
                 float v = MathF.Max(0.05f, d.Speed) * Rover.VmaxMs;
-                moveM = dir.IsDiagonal ? WorldMap.CellM * 1.41421f : WorldMap.CellM;
+                moveM = dir.IsDiagonal ? Map.CellM * 1.41421f : Map.CellM;
                 dt = moveM / v;
                 driveJ = DriveEnergy(Rover.Pos, to, moveM, v);
                 Rover.LastSpeed = d.Speed;
                 var truth = Map.ClassAt(to);
-                float realDrop = Map.Height(Rover.Pos) - Map.Height(to);
+                float realDrop = (Map.Height(Rover.Pos) - Map.Height(to)) * Map.DropScale;
                 if (truth == TerrainClass.Barranco && realDrop < WorldMap.CliffDropM * 0.6f && Map.Slope[Map.Idx(to)] < 40f)
                 {
                     // borde suave de un cráter/barranco: no hay caída, pero el fondo no es transitable → atasco y retroceso
@@ -836,7 +881,7 @@ public sealed class Mission
                 }
                 moved = true;
                 Rover.Pos = to;
-                RouteIdx = Route.IndexOf(to) >= 0 ? Route.IndexOf(to) : RouteIdx;
+                RouteIdx = NextRouteIdx(to);
                 Trail.Add(to);
                 DistanceM += moveM;
                 Rover.OdometerM += moveM;
@@ -846,11 +891,17 @@ public sealed class Mission
             }
             case RoverAction.Muestrear:
                 dt = 90f;
+                if (Heli)
+                {
+                    driveJ = HeliSampleJ(ref dt);
+                    AddLog("info", $"Helicóptero en {Rover.Pos}: {HeliLzNote}");
+                }
                 TakeSample();
                 break;
             case RoverAction.Recargar:
                 dt = 120f;
                 recharge = true;
+                if (Heli) { HeliLanded = true; HeliAglM = 0; HeliPowerW = HeliModel.GroundIdleW * 0.3f; }
                 break;
             case RoverAction.ModoSeguro:
                 dt = 60f;
@@ -859,8 +910,10 @@ public sealed class Mission
             default:
                 dt = 20f;
                 Rover.LastSpeed = 0;
+                if (Heli) driveJ = HeliWaitJ(dt);
                 break;
         }
+        if (Heli) UpdateHeliAir();
         if (!moved && d.Action != RoverAction.Avanzar) Rover.LastSpeed = 0;
         LastMoved = moved;
         LastStepSeconds = dt;
@@ -889,6 +942,15 @@ public sealed class Mission
             Rover.EstY = Rover.TrueY;
             AddLog("ok", $"Refugio {Rover.Pos}: relocalización (error de odometría → 0 m) y carga disponible");
         }
+    }
+
+    /// <summary>Índice de la celda alcanzada en la ruta, buscando hacia adelante (una ruta podría repetir celdas).</summary>
+    private int NextRouteIdx(Cell to)
+    {
+        if (Route.Count == 0) return RouteIdx;
+        int k = Route.IndexOf(to, Math.Clamp(RouteIdx + 1, 0, Route.Count - 1));
+        if (k < 0) k = Route.IndexOf(to);
+        return k >= 0 ? k : RouteIdx;
     }
 
     private float DriveEnergy(Cell a, Cell b, float d, float v)
@@ -979,14 +1041,14 @@ public sealed class Mission
         const float cTh = 15000f;   // J/K
         float driveW = dt > 0 ? driveJ / dt : 0;
         float rtgHeat = Rover.RtgW * 1.5f;   // calor residual del generador de radioisótopos (sonda)
-        float dT = ((tExt + 15f - Rover.TempInt) / p.ThermalTauS + (heater * 0.95f + rtgHeat - cooler * coolEff + driveW * 0.04f) / cTh) * dt;
+        float dT = ((tExt + 15f - Rover.TempInt) / p.ThermalTauS + (heater * 0.95f + rtgHeat - cooler * coolEff + driveW * (Heli ? 0.002f : 0.04f)) / cTh) * dt;   // el rotor disipa al aire, no en la electrónica
         Rover.TempInt += dT;
         Rover.HeaterW = heater;
         Rover.CoolerW = cooler;
 
         float solar = Env.SolarIrradiance() * Rover.PanelM2 * Rover.PanelEff * (1 - Rover.PanelDust) * (recharge ? 1.25f : 1f);
         bool atRefuge = Map.Refuges.Contains(Rover.Pos);
-        float charger = (atRefuge ? 600f : 0f) + Rover.RtgW;
+        float charger = (atRefuge ? (Heli ? 9000f : 600f) : 0f) + Rover.RtgW;   // helipuerto: carga rápida
         float baseW = safe ? 15f : Rover.BaseW;
         float loadJ = (baseW + heater + cooler) * dt + driveJ;
         float gainJ = (solar + charger) * dt;
@@ -1022,7 +1084,7 @@ public sealed class Mission
     private void AutoEvents()
     {
         // remoción en masa (Tierra) cuando la lluvia diaria supera el periodo de retorno de 2 años
-        if (Planet.HasRain && Env.Rain24h > GeoClick.ReturnPeriods[0].Mm && !Env.Has(EventKind.Remocion) && _rngEvents.Chance(0.03f))
+        if (Planet.HasRain && Env.Rain24h > Map.Geo.RainT(2) && !Env.Has(EventKind.Remocion) && _rngEvents.Chance(0.03f))
             Inject(EventKind.Remocion, "lluvia acumulada sobre el umbral T=2 años");
         // sismo espontáneo que altera el mapa
         if (Env.Get(EventKind.Sismo) is { } q && q.Remaining == 5 && q.Detail == "sismo espontáneo")
@@ -1132,6 +1194,22 @@ public sealed class Mission
         AddLog("fallo", $"FRACASO: {reason}. Postmortem en la traza (paso {StepCount}).");
     }
 
+    /// <summary>Nombre del mundo para el HUD y los informes (escenario GeoClick o cuerpo).</summary>
+    public string WorldName => Map.IsScenario ? $"Tierra · GeoClick {Map.Geo.Id}" : Planet.Name;
+
+    private string[] ScenarioNotes()
+    {
+        var g = Map.Geo;
+        return new[]
+        {
+            $"Elevación {g.ElevMin:0}–{g.ElevMax:0} m (mediana {g.ElevMedian:0}); pendiente mediana {g.SlopeMedian:0.0}° · {g.Km2Over25:0.0} km² sobre 25° (DEM GLO-30).",
+            $"Cobertura dominante: {string.Join(", ", g.Cover.OrderByDescending(kv => kv.Value).Take(3).Select(kv => $"{kv.Key.ToLowerInvariant()} {kv.Value:0.0} km²"))} (ESA WorldCover).",
+            $"Lluvia normal {g.AnnualRainMm:0} mm/año; máx. diaria {g.MaxDailyMm:0.#} mm ({g.MaxDailyDate}); T=10 años {g.RainT(10):0.#} mm/día.",
+            $"Temperatura media {g.TempMeanC:0.0} °C; {g.FrostDaysYear:0.#} heladas/año · cicatrices {g.ScarsHa:0.#} ha · área quemada {g.BurnedHa:0.#} ha.",
+            Heli ? $"El área mide {Map.N * Map.CellM / 1000f:0.0} km de lado: el helicóptero la cruza en ~{Map.N * Map.CellM / HeliModel.CruiseMs / 60f:0} min." : $"Vehículo: rover terrestre de campo (2 m/s, 6 kWh) — el área mide {Map.N * Map.CellM / 1000f:0.0} km de lado.",
+        };
+    }
+
     public static string StateName(MissionState s) => s switch
     {
         MissionState.Configuracion => "CONFIGURACIÓN", MissionState.Exploracion => "EXPLORACIÓN", MissionState.Alerta => "ALERTA",
@@ -1163,8 +1241,8 @@ public sealed class Mission
                 }
                 else if (p.Style == TerrainStyle.Tierra)
                 {
-                    Env.Add(EventKind.Tormenta, 0.9f, $"lluvia intensa (≈ T=10 años: {GeoClick.ReturnPeriods[2].Mm} mm/día)");
-                    AddLog("evento", $"TORMENTA DE LLUVIA: intensidad creciente; referencia GeoClick T=10 años = {GeoClick.ReturnPeriods[2].Mm} mm en un día");
+                    Env.Add(EventKind.Tormenta, 0.9f, $"lluvia intensa (≈ T=10 años: {Map.Geo.RainT(10)} mm/día)");
+                    AddLog("evento", $"TORMENTA DE LLUVIA: intensidad creciente; referencia GeoClick T=10 años = {Map.Geo.RainT(10)} mm en un día");
                 }
                 else if (p.Style == TerrainStyle.Mercurio)
                 {
@@ -1254,7 +1332,7 @@ public sealed class Mission
                     .Where(c => c.Dist(Rover.Pos) < 10 && Map.Slope[Map.Idx(c)] > 18).OrderByDescending(c => Map.Slope[Map.Idx(c)]).FirstOrDefault();
                 var ch = Map.Landslide(steep == default ? Rover.Pos : steep, _rngEvents);
                 Env.Add(EventKind.Remocion, 0.7f, why);
-                AddLog("evento", $"REMOCIÓN EN MASA ({why}): {ch.Count} celdas con detritos en laderas > 18° (GeoClick registró {GeoClick.ScarsHa} ha de cicatrices 2018–2026)");
+                AddLog("evento", $"REMOCIÓN EN MASA ({why}): {ch.Count} celdas con detritos en laderas > 18° (GeoClick registró {Map.Geo.ScarsHa} ha de cicatrices 2018–2026)");
                 RequestReplan("remoción en masa");
                 break;
             }
@@ -1360,6 +1438,9 @@ public sealed class Mission
         ["integridad_pct"] = MathF.Round(Rover.Integrity, 1),
         ["ms_ag_total"] = MathF.Round(GaMsTotal, 1),
         ["ms_decision_medio"] = StepCount == 0 ? 0 : MathF.Round(DecisionMsTotal / StepCount, 3),
+        ["despliegues_dron"] = Drone.Deployments,
+        ["objetivos_dron"] = Drone.ObjectivesFound,
+        ["celdas_dron"] = Drone.CellsScanned,
     };
 
     public string ResultJson()
@@ -1371,9 +1452,9 @@ public sealed class Mission
             ["fecha"] = "2026-11-07",
             ["configuracion"] = new Dictionary<string, object>
             {
-                ["planeta"] = Planet.Name, ["modo"] = Config.Probe ? "sonda" : "rover", ["semilla"] = Config.Seed, ["dificultad"] = Config.Difficulty,
+                ["planeta"] = WorldName, ["escenario"] = Map.IsScenario ? Map.Geo.Id : "procedural", ["modo"] = Config.Probe ? "sonda" : "rover", ["semilla"] = Config.Seed, ["dificultad"] = Config.Difficulty,
                 ["bateria_inicial_pct"] = Config.BatteryPct, ["prioridad_ciencia"] = Config.ScienceWeight, ["mes"] = Config.Month,
-                ["rna"] = Config.UseRna, ["difuso"] = Config.UseFuzzy, ["ag"] = Config.UseGa, ["politica"] = Config.AblationName, ["modo"] = Config.ClickMode ? "destino por clic" : "autónomo",
+                ["rna"] = Config.UseRna, ["difuso"] = Config.UseFuzzy, ["ag"] = Config.UseGa, ["dron"] = Config.UseDrone, ["politica"] = Config.AblationName, ["modo"] = Config.ClickMode ? "destino por clic" : "autónomo",
                 ["ag_parametros"] = new Dictionary<string, object>
                 {
                     ["poblacion"] = Config.Ga.Population, ["generaciones"] = Config.Ga.Generations, ["puntos_de_paso"] = Config.Ga.Waypoints,

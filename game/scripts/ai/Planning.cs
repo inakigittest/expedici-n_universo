@@ -25,9 +25,11 @@ public sealed class CostModel
 
     /// <summary>Carga térmica media esperada (W): calefacción nocturna en cuerpos fríos, refrigeración en calientes.</summary>
     public float ExpectedThermalW => MathF.Max(R.HeaterW + R.CoolerW, MapShape.Planet.TempMeanC < -20 ? 75f : MapShape.Planet.TempMeanC > 100 ? 60f : 15f);
-    public bool Blocked(Cell c) => !InBounds(c) || B.Forbidden(c) || (!MapShape.ProbeMode && B.SlopeEst[B.Idx(c)] > WorldMap.MaxSlopeDeg + 6);
+    public bool Heli;                              // helicóptero: el suelo no bloquea, solo el borde del área y los vetos
+    public Func<Cell, Cell, float>? HeliWh;
+    public bool Blocked(Cell c) => !InBounds(c) || (Heli ? B.Vetoed[B.Idx(c)] : B.Forbidden(c) || (!MapShape.ProbeMode && B.SlopeEst[B.Idx(c)] > WorldMap.MaxSlopeDeg + 6));
 
-    public float StepM(Cell a, Cell b) => (b - a).IsDiagonal ? WorldMap.CellM * 1.41421f : WorldMap.CellM;
+    public float StepM(Cell a, Cell b) => (b - a).IsDiagonal ? MapShape.CellM * 1.41421f : MapShape.CellM;
 
     /// <summary>Velocidad esperada (fracción de vmax) según el riesgo estimado.</summary>
     public float ExpectedSpeed(Cell c) => MathX.Clamp(0.85f - 0.7f * B.Risk(c), 0.15f, 0.9f);
@@ -35,6 +37,7 @@ public sealed class CostModel
     /// <summary>Energía estimada (Wh) de un paso a → b: rodadura + subida + consumo base durante el tiempo de marcha.</summary>
     public float StepWh(Cell a, Cell b)
     {
+        if (Heli && HeliWh != null) return HeliWh(a, b);
         float d = StepM(a, b);
         float dh = MathF.Max(0, B.HeightEst[B.Idx(b)] - B.HeightEst[B.Idx(a)]);
         float crr = B.Observed[B.Idx(b)] ? WorldMap.RollingCoeff(MapShape.SoilAt(b)) : 0.12f;
@@ -44,40 +47,74 @@ public sealed class CostModel
         return (driveJ + (R.BaseW + ExpectedThermalW) * t) / 3600f;
     }
 
-    public float StepTimeS(Cell a, Cell b) => StepM(a, b) / (R.VmaxMs * ExpectedSpeed(b));
+    public float StepTimeS(Cell a, Cell b) => StepM(a, b) / (R.VmaxMs * (Heli ? 0.85f : ExpectedSpeed(b)));
 
     /// <summary>Camino de menor costo (Dijkstra) en el mapa estimado. riskWeight = 0 → menor distancia (baseline de control).</summary>
-    public List<Cell>? Shortest(Cell from, Cell to, float riskWeight)
+    // caché por versión de la creencia: bloqueo y riesgo de cada celda (los mapas a escala real tienen ~100 000 celdas)
+    private int _cacheVersion = -1;
+    private bool[]? _blocked;
+    private float[]? _risk;
+    private static readonly int[] Dx = { 1, -1, 0, 0, 1, 1, -1, -1 }, Dy = { 0, 0, 1, -1, 1, -1, 1, -1 };
+
+    private void EnsureCache()
     {
         int n = MapShape.N;
+        if (_cacheVersion == B.Version && _blocked != null) return;
+        _blocked ??= new bool[n * n];
+        _risk ??= new float[n * n];
+        for (int i = 0; i < n * n; i++)
+        {
+            var c = new Cell(i % n, i / n);
+            _blocked[i] = Blocked(c);
+            _risk[i] = B.Risk(c);
+        }
+        _cacheVersion = B.Version;
+    }
+
+    /// <summary>A* (heurística octil admisible: el costo por metro nunca es menor que 1) sobre la creencia.</summary>
+    public List<Cell>? Shortest(Cell from, Cell to, float riskWeight)
+    {
+        EnsureCache();
+        int n = MapShape.N;
+        if (!MapShape.InGrid(from) || !MapShape.InGrid(to)) return null;
         var cost = new float[n * n];
         var prev = new int[n * n];
         Array.Fill(cost, float.MaxValue);
         Array.Fill(prev, -1);
-        var pq = new PriorityQueue<Cell, float>();
-        cost[B.Idx(from)] = 0;
-        pq.Enqueue(from, 0);
-        while (pq.Count > 0)
+        float cm = MapShape.CellM, dg = cm * 1.41421f;
+        int s0 = B.Idx(from), goal = B.Idx(to);
+        float H(int i)
         {
-            var c = pq.Dequeue();
-            if (c == to) break;
-            foreach (var d in Cell.Dirs8)
+            int dx = Math.Abs(i % n - to.X), dy = Math.Abs(i / n - to.Y);
+            return cm * (Math.Max(dx, dy) - Math.Min(dx, dy)) + dg * Math.Min(dx, dy);
+        }
+        var pq = new PriorityQueue<int, float>();
+        cost[s0] = 0;
+        pq.Enqueue(s0, H(s0));
+        while (pq.TryDequeue(out int i, out float f))
+        {
+            if (i == goal) break;
+            float ci = cost[i];
+            if (f > ci + H(i) + 1e-3f) continue;   // entrada obsoleta
+            int x = i % n, y = i / n;
+            for (int k = 0; k < 8; k++)
             {
-                var o = c + d;
-                if (Blocked(o) && o != to) continue;
-                float step = StepM(c, o) * (1 + riskWeight * B.Risk(o));
-                float nc = cost[B.Idx(c)] + step;
-                if (nc < cost[B.Idx(o)])
+                int nx = x + Dx[k], ny = y + Dy[k];
+                if (nx < 0 || ny < 0 || nx >= n || ny >= n) continue;
+                int j = ny * n + nx;
+                if (_blocked![j] && j != goal) continue;
+                float nc = ci + (k >= 4 ? dg : cm) * (1 + riskWeight * _risk![j]);
+                if (nc < cost[j])
                 {
-                    cost[B.Idx(o)] = nc;
-                    prev[B.Idx(o)] = B.Idx(c);
-                    pq.Enqueue(o, nc);
+                    cost[j] = nc;
+                    prev[j] = i;
+                    pq.Enqueue(j, nc + H(j));
                 }
             }
         }
-        if (cost[B.Idx(to)] == float.MaxValue) return null;
+        if (cost[goal] == float.MaxValue) return null;
         var path = new List<Cell>();
-        for (int i = B.Idx(to); i >= 0; i = prev[i]) path.Add(new Cell(i % n, i / n));
+        for (int i = goal; i >= 0; i = prev[i]) path.Add(new Cell(i % n, i / n));
         path.Reverse();
         return path;
     }
@@ -85,24 +122,31 @@ public sealed class CostModel
     /// <summary>Distancias (m) desde un origen a todas las celdas con costo por riesgo (para el plan de misión).</summary>
     public float[] DistanceField(Cell from, float riskWeight)
     {
+        EnsureCache();
         int n = MapShape.N;
         var cost = new float[n * n];
         Array.Fill(cost, float.MaxValue);
-        var pq = new PriorityQueue<Cell, float>();
-        cost[B.Idx(from)] = 0;
-        pq.Enqueue(from, 0);
-        while (pq.Count > 0)
+        if (!MapShape.InGrid(from)) return cost;
+        float cm = MapShape.CellM, dg = cm * 1.41421f;
+        var pq = new PriorityQueue<int, float>();
+        int s0 = B.Idx(from);
+        cost[s0] = 0;
+        pq.Enqueue(s0, 0);
+        while (pq.TryDequeue(out int i, out float ci))
         {
-            var c = pq.Dequeue();
-            foreach (var d in Cell.Dirs8)
+            if (ci > cost[i]) continue;   // entrada obsoleta
+            int x = i % n, y = i / n;
+            for (int k = 0; k < 8; k++)
             {
-                var o = c + d;
-                if (Blocked(o)) continue;
-                float nc = cost[B.Idx(c)] + StepM(c, o) * (1 + riskWeight * B.Risk(o));
-                if (nc < cost[B.Idx(o)])
+                int nx = x + Dx[k], ny = y + Dy[k];
+                if (nx < 0 || ny < 0 || nx >= n || ny >= n) continue;
+                int j = ny * n + nx;
+                if (_blocked![j]) continue;
+                float nc = ci + (k >= 4 ? dg : cm) * (1 + riskWeight * _risk![j]);
+                if (nc < cost[j])
                 {
-                    cost[B.Idx(o)] = nc;
-                    pq.Enqueue(o, nc);
+                    cost[j] = nc;
+                    pq.Enqueue(j, nc);
                 }
             }
         }
@@ -110,7 +154,7 @@ public sealed class CostModel
     }
 
     /// <summary>Energía media estimada por metro (Wh/m) en terreno llano, para presupuestos.</summary>
-    public float WhPerMeter => (R.MassKg * MapShape.Planet.Gravity * 0.12f / R.Efficiency + (R.BaseW + ExpectedThermalW) / (R.VmaxMs * 0.6f)) / 3600f;
+    public float WhPerMeter => Heli ? (HeliModel.ForwardW(1.1f, 21f) + HeliModel.AvionicsW) / 21f / 3600f : (R.MassKg * MapShape.Planet.Gravity * 0.12f / R.Efficiency + (R.BaseW + ExpectedThermalW) / (R.VmaxMs * 0.6f)) / 3600f;
 }
 
 // ====================================================================== AG de rutas
@@ -382,7 +426,26 @@ public sealed class RouteGA
             }
             if (stuck || budget <= 0) break;
         }
-        c.Path = path;
+        // sin ciclos: si el camino vuelve a una celda ya pisada, se corta el lazo (sigue siendo contiguo)
+        var seen = new Dictionary<Cell, int>();
+        var clean = new List<Cell>(path.Count);
+        foreach (var cell in path)
+        {
+            if (seen.TryGetValue(cell, out int k))
+            {
+                for (int r = clean.Count - 1; r > k; r--)
+                {
+                    seen.Remove(clean[r]);
+                    clean.RemoveAt(r);
+                }
+            }
+            else
+            {
+                seen[cell] = clean.Count;
+                clean.Add(cell);
+            }
+        }
+        c.Path = clean;
         c.ReachesGoal = p == _goal;
     }
 
@@ -436,10 +499,10 @@ public sealed class RouteGA
         c.Forbidden = forb;
         c.SteepCells = steep;
         c.Science = sciTotal > 0 ? sci / sciTotal : 0;
-        c.Distance = lenM / (n * WorldMap.CellM * 2f);
+        c.Distance = lenM / (n * _cm.MapShape.CellM * 2f);
         c.Energy = wh / MathF.Max(20f, _cm.R.CapacityWh * 0.3f);
         c.Risk = riskSum / steps + 0.5f * maxRisk;
-        c.Time = timeS / (n * 2f * WorldMap.CellM / _cm.R.VmaxMs);
+        c.Time = timeS / (n * 2f * _cm.MapShape.CellM / _cm.R.VmaxMs);
         float deficit = MathF.Max(0, wh + _reserveWh - _cm.R.BatteryWh);
         c.Penalty = forb * 2f + steep * 0.6f + (c.ReachesGoal ? 0 : 3f + _goal.Dist(path[^1]) / n) + (deficit > 0 ? 1f + deficit / 50f : 0);
         c.Feasible = c.ReachesGoal && forb == 0;
@@ -530,7 +593,7 @@ public sealed class MissionGA
             if (back == float.MaxValue) back = 9999;
             tour += back;
             float energy = tour * whm + analysis;
-            float fit = scienceWeight * value / totalValue - 0.35f * tour / (_cm.MapShape.N * WorldMap.CellM * 4)
+            float fit = scienceWeight * value / totalValue - 0.35f * tour / (_cm.MapShape.N * _cm.MapShape.CellM * 4)
                         - (mass > cap ? 1f + (mass - cap) : 0) - (energy > budget ? 1f + (energy - budget) / 40f : 0);
             return (fit, order, value, mass, energy, tour, refuge);
         }

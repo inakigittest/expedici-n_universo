@@ -12,8 +12,11 @@ namespace AresX.View;
 public static class Grid
 {
     public const float U = 3f;                       // unidades de mundo por celda
-    public const float V = U / WorldMap.CellM;       // unidades de mundo por metro de altura (sin exageración)
+    public static float V => U / Map.CellM;          // unidades de mundo por metro de altura (escala real, sin exageración)
     public static WorldMap Map = null!;
+    /// <summary>Malla del terreno de un escenario a escala (la superposición de creencias la reutiliza).</summary>
+    public static ArrayMesh? TerrainMesh;
+    public static bool Large => Map != null && Map.N > 64;
 
     public static float Half => Map.N * U / 2f;
 
@@ -56,6 +59,8 @@ public static class Palette
         Sim.Soil.Agua => new Color("3a78c8"),
         Sim.Soil.Barro => new Color("6a5034"),
         Sim.Soil.Nube => new Color("d8c39a"),
+        Sim.Soil.Cultivo => new Color("b8a868"),
+        Sim.Soil.Quemado => new Color("4a3a30"),
         _ => new Color("909090"),
     };
 
@@ -94,6 +99,12 @@ public partial class TerrainView : Node3D
     {
         var map = Grid.Map;
         _builtVersion = map.HeightVersion;
+        if (map.IsScenario)
+        {
+            RebuildScenario(map);
+            return;
+        }
+        Grid.TerrainMesh = null;
         int fn = map.FN;
         float step = Grid.U / WorldMap.Sub;
         var st = new SurfaceTool();
@@ -135,6 +146,68 @@ public partial class TerrainView : Node3D
         st.AddVertex(p0);
         st.AddVertex(p1);
         st.AddVertex(p2);
+    }
+
+    private static NoiseTexture2D? _detail;
+
+    /// <summary>Textura de grano (ruido fractal sin costuras) que modula la imagen satelital entre ×0,78 y ×1,1.</summary>
+    private static Texture2D DetailTexture()
+    {
+        if (_detail != null) return _detail;
+        var grad = new Gradient();
+        grad.SetColor(0, new Color(0.78f, 0.78f, 0.78f));
+        grad.SetColor(1, new Color(1.1f, 1.1f, 1.08f));
+        _detail = new NoiseTexture2D
+        {
+            Width = 256, Height = 256, Seamless = true, ColorRamp = grad, GenerateMipmaps = true,
+            Noise = new FastNoiseLite { NoiseType = FastNoiseLite.NoiseTypeEnum.Cellular, Frequency = 0.035f, FractalType = FastNoiseLite.FractalTypeEnum.Fbm, FractalOctaves = 3 },
+        };
+        return _detail;
+    }
+
+    /// <summary>
+    /// Escenario GeoClick: malla indexada con un vértice por esquina de celda (≈100 000 vértices para 9 km a 30 m) y
+    /// la imagen Sentinel-2 del informe como textura (el detalle visual viene de la textura, no de más polígonos).
+    /// </summary>
+    private void RebuildScenario(WorldMap map)
+    {
+        int n = map.N, vn = n + 1;
+        var tex = Core.Scenarios.Satellite(map.Geo);
+        var st = new SurfaceTool();
+        st.Begin(Mesh.PrimitiveType.Triangles);
+        for (int j = 0; j < vn; j++)
+        for (int i = 0; i < vn; i++)
+        {
+            st.SetUV(new Vector2(i / (float)n, j / (float)n));
+            st.SetUV2(new Vector2(i * 0.5f, j * 0.5f));
+            if (tex == null)
+            {
+                var c = map.Clamp(new Cell(i, j));
+                st.SetColor(Palette.Soil(map.Soils[map.Idx(c)], map.Planet.Style));
+            }
+            st.AddVertex(new Vector3(i * Grid.U - Grid.Half, map.FineAt(i * WorldMap.Sub, j * WorldMap.Sub) * Grid.V, j * Grid.U - Grid.Half));
+        }
+        for (int j = 0; j < n; j++)
+        for (int i = 0; i < n; i++)
+        {
+            int a = j * vn + i, b = a + 1, c = a + vn, d = c + 1;
+            st.AddIndex(a); st.AddIndex(b); st.AddIndex(d);
+            st.AddIndex(a); st.AddIndex(d); st.AddIndex(c);
+        }
+        st.GenerateNormals();
+        var mesh = st.Commit();
+        _mesh.Mesh = mesh;
+        Grid.TerrainMesh = mesh;
+        var mat = tex != null
+            ? new StandardMaterial3D { AlbedoTexture = tex, Roughness = 1f, TextureFilter = BaseMaterial3D.TextureFilterEnum.LinearWithMipmapsAnisotropic }
+            : new StandardMaterial3D { VertexColorUseAsAlbedo = true, VertexColorIsSrgb = true, Roughness = 1f };
+        // detalle procedural (asset generado, no geometría): grano de suelo multiplicado sobre la imagen satelital,
+        // para que de cerca no se vea solo el píxel de 8–10 m de Sentinel-2
+        mat.DetailEnabled = true;
+        mat.DetailBlendMode = BaseMaterial3D.BlendModeEnum.Mul;
+        mat.DetailUVLayer = BaseMaterial3D.DetailUV.UV2;
+        mat.DetailAlbedo = DetailTexture();
+        _mesh.MaterialOverride = mat;
     }
 }
 
@@ -204,7 +277,7 @@ public partial class PropsView : Node3D
                     break;
                 }
                 case Hazard.Tree:
-                    for (int k = 0; k < 3; k++)
+                    for (int k = 0; k < (Grid.Large ? 2 : 3); k++)
                     {
                         float hh = oh * Grid.V * rng.Range(0.8f, 1.3f) + 1f;
                         var p = Grid.OnGround(center.X + rng.Range(-0.9f, 0.9f), center.Z + rng.Range(-0.9f, 0.9f), hh / 2);
@@ -329,7 +402,11 @@ public partial class OverlayView : Node3D
             _markers.AddChild(pad);
             _markers.AddChild(MakeLabel(r == m.Map.Start ? "BASE · REFUGIO" : "ESTACIÓN · REFUGIO", p + Vector3.Up * 9.8f, new Color("8cff9a")));
         }
-        foreach (var s in m.Map.Sites)
+        foreach (var s in m.Map.Sites) AddSiteMarker(s);
+    }
+
+    private void AddSiteMarker(ScienceSite s)
+    {
         {
             var p = Grid.CellCenter(s.Cell);
             var node = new Node3D { Position = p };
@@ -373,6 +450,7 @@ public partial class OverlayView : Node3D
         // sitios
         foreach (var s in m.Map.Sites)
         {
+            if (!_siteNodes.ContainsKey(s.Id)) AddSiteMarker(s);   // objetivos nuevos (p. ej. propuestos por el dron)
             var (node, label, pole) = _siteNodes[s.Id];
             bool planned = m.Plan?.Order.Contains(s) == true;
             int order = m.Plan?.Order.IndexOf(s) ?? -1;
@@ -389,7 +467,7 @@ public partial class OverlayView : Node3D
         BuildFront(m);
         UpdateBeacon(m);
         // alcance de sensores (limitado por la visibilidad)
-        float rangeCells = Mathf.Clamp(m.Env.Visibility / WorldMap.CellM, 1.5f, 4.2f);
+        float rangeCells = Mathf.Clamp(m.Env.Visibility / m.Map.CellM, 1.5f, 4.2f);
         if (!m.Env.IsDay) rangeCells = Mathf.Min(rangeCells, 3.2f);
         _range.Scale = new Vector3(rangeCells * Grid.U, 1, rangeCells * Grid.U);
     }
@@ -437,8 +515,76 @@ public partial class OverlayView : Node3D
         st.AddVertex(a - side); st.AddVertex(b + side); st.AddVertex(b - side);
     }
 
+    private MeshInstance3D? _cellTexMesh;
+    private ImageTexture? _cellTex;
+    private byte[]? _cellBytes;
+
+    /// <summary>
+    /// Mapas grandes: las creencias se pintan en una textura N×N (un píxel por celda) aplicada sobre la misma malla del
+    /// terreno, en lugar de miles de quads por paso. Fuera del polígono analizado se oscurece.
+    /// </summary>
+    private void BuildCellsTexture(Mission m)
+    {
+        if (Grid.TerrainMesh == null) { _beliefVersion = -1; return; }
+        _beliefVersion = m.Belief.Version;
+        _lastShowRisk = ShowRisk;
+        _lastTruth = ShowTruth;
+        _mapVersion = m.Map.HeightVersion;
+        var b = m.Belief;
+        var map = m.Map;
+        int n = map.N;
+        _cellBytes ??= new byte[n * n * 4];
+        var px = _cellBytes;
+        for (int i = 0; i < n * n; i++)
+        {
+            var c = new Cell(i % n, i / n);
+            byte r = 0, g = 0, bl = 0, a = 0;
+            void Set(Color col) { r = (byte)(col.R * 255); g = (byte)(col.G * 255); bl = (byte)(col.B * 255); a = (byte)(col.A * 255); }
+            if (!map.InBounds(c)) Set(new Color(0.03f, 0.04f, 0.06f, 0.62f));
+            else if (b.ConfirmedCliff[i]) Set(new Color(1f, 0.15f, 0.1f, 0.6f));
+            else if (b.ConfirmedObstacle[i]) Set(new Color(1f, 0.55f, 0.1f, 0.5f));
+            else if (b.Vetoed[i]) Set(new Color(0.9f, 0.2f, 0.9f, 0.55f));
+            else if (ShowRisk && b.Observed[i])
+            {
+                float rk = b.Risk(c);
+                if (rk > 0.15f)
+                {
+                    var col = rk < 0.5f ? new Color(1f, 0.9f, 0.2f).Lerp(new Color(1f, 0.5f, 0.1f), (rk - 0.15f) / 0.35f)
+                                        : new Color(1f, 0.5f, 0.1f).Lerp(new Color(1f, 0.1f, 0.1f), (rk - 0.5f) / 0.5f);
+                    col.A = 0.14f + 0.26f * rk;
+                    Set(col);
+                }
+            }
+            if (ShowTruth && map.InBounds(c) && map.ClassAt(c) != TerrainClass.Libre && !b.Forbidden(c)) Set(new Color(0.3f, 0.6f, 1f, 0.5f));
+            px[i * 4] = r; px[i * 4 + 1] = g; px[i * 4 + 2] = bl; px[i * 4 + 3] = a;
+        }
+        var img = Image.CreateFromData(n, n, false, Image.Format.Rgba8, px);
+        if (_cellTex == null || _cellTexMesh == null || _cellTexMesh.Mesh != Grid.TerrainMesh)
+        {
+            _cellTex = ImageTexture.CreateFromImage(img);
+            _cellTexMesh?.QueueFree();
+            _cellTexMesh = new MeshInstance3D
+            {
+                Name = "BeliefTexture", Mesh = Grid.TerrainMesh, Position = Vector3.Up * 0.06f, CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+                MaterialOverride = new StandardMaterial3D
+                {
+                    AlbedoTexture = _cellTex, Transparency = BaseMaterial3D.TransparencyEnum.Alpha, ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+                    TextureFilter = BaseMaterial3D.TextureFilterEnum.Nearest, RenderPriority = 1,
+                },
+            };
+            AddChild(_cellTexMesh);
+        }
+        else _cellTex.Update(img);
+        _cells.Mesh = null;
+    }
+
     private void BuildCells(Mission m)
     {
+        if (m.Map.IsScenario)
+        {
+            BuildCellsTexture(m);
+            return;
+        }
         _beliefVersion = m.Belief.Version;
         _lastShowRisk = ShowRisk;
         _lastTruth = ShowTruth;
@@ -474,7 +620,7 @@ public partial class OverlayView : Node3D
                     Quad(st, c, col, 0.1f);
                 }
             }
-            if (ShowTruth && m.Map.ClassAt(c) != TerrainClass.Libre && !b.Forbidden(c))
+            if (ShowTruth && m.Map.InBounds(c) && m.Map.ClassAt(c) != TerrainClass.Libre && !b.Forbidden(c))
                 Quad(st, c, new Color(0.3f, 0.6f, 1f, 0.3f), 0.14f, 0.3f);
         }
         _cells.Mesh = st.Commit();
@@ -590,6 +736,6 @@ public partial class OverlayView : Node3D
         _destLabel.Position = p + Vector3.Up * 14.6f;
         _destLabel.Modulate = col;
         _destLabel.Text = m.PendingDestination != null ? "DESTINO EN TRÁNSITO (enlace)" :
-            $"DESTINO · {m.TargetName}\n{r?.VerdictText ?? ""} · faltan {left} pasos · {left * WorldMap.CellM:0} m";
+            $"DESTINO · {m.TargetName}\n{r?.VerdictText ?? ""} · faltan {left} pasos · {left * m.Map.CellM:0} m";
     }
 }

@@ -30,6 +30,9 @@ public interface IGameHost
     string CycleTool();
     void RotateCam(int dir);
     void ZoomCam(int step);
+    void ToggleWindow(string id);
+    void DroneAction();
+    void ToggleDroneAuto();
 }
 
 /// <summary>Barra superior del centro de control.</summary>
@@ -55,7 +58,7 @@ public partial class TopBar : Control
             Gfx.Chip(this, new Vector2(x, 6), t, 11, c, fill);
             x += Gfx.ChipWidth(t, 11) + 6;
         }
-        Chip($"{m.Planet.Name.ToUpperInvariant()} · {(m.Config.Probe ? "SONDA" : "ROVER")}", new Color("8ec8ff"));
+        Chip($"{m.WorldName.ToUpperInvariant()} · {(m.Config.Probe ? "SONDA" : m.Heli ? "HELICÓPTERO" : "ROVER")}", new Color("8ec8ff"));
         int hh = (int)m.Env.LocalHour, mm = (int)((m.Env.LocalHour - hh) * 60);
         Chip($"SOL {m.Env.Sol:000} · {hh:00}:{mm:00} {(m.Env.IsDay ? "☀" : "☾")}", m.Env.IsDay ? UiTheme.Accent : new Color("9aa8ff"));
         Chip(Mission.StateName(m.State), UiTheme.StateColor(m.State), true);
@@ -82,7 +85,7 @@ public partial class Hud : CanvasLayer
     private RichTextLabel _log = null!, _endText = null!;
     private Label _banner = null!, _envStrip = null!, _objective = null!;
     private PanelContainer _end = null!, _bannerBox = null!;
-    private Button _playBtn = null!, _modeBtn = null!, _riskBtn = null!, _truthBtn = null!;
+    private Button _playBtn = null!, _modeBtn = null!, _riskBtn = null!, _truthBtn = null!, _droneBtn = null!, _droneAutoBtn = null!;
     private readonly List<Button> _speedBtns = new();
     private int _logSeen, _logBuilt = -1;
     private string _filter = "todo";
@@ -107,17 +110,17 @@ public partial class Hud : CanvasLayer
         Anchor(_top, 0, 0, 1, 0, 0, 0, 0, 28);
 
         // Panel B · telemetría (izquierda)
-        _pTele = MakePanel(0, 0, 0, 0, 6, 32, 326, 506, "TELEMETRÍA · SENSORES CON RUIDO Y VALIDACIÓN", out var leftBox);
+        _pTele = MakeWindow("tele", "TELEMETRÍA · SENSORES CON RUIDO Y VALIDACIÓN", new Rect2(6, 32, 320, 474), out var leftBox);
         Telemetry = new TelemetryPanel { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
         leftBox.AddChild(Scroll(Telemetry));
 
         // Panel C · decisión explicable (derecha)
-        _pDec = MakePanel(1, 0, 1, 0, -340, 32, -6, 506, "DECISIÓN EXPLICABLE · RNA → DIFUSO + AG → SUPERVISOR", out var rightBox);
+        _pDec = MakeWindow("dec", "DECISIÓN EXPLICABLE · RNA → DIFUSO + AG → SUPERVISOR", new Rect2(760, 32, 336, 474), out var rightBox);
         Decision = new DecisionPanel { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
         rightBox.AddChild(Scroll(Decision));
 
         // Panel D · traza temporal (abajo izquierda)
-        _pLog = MakePanel(0, 1, 0, 1, 6, -210, 526, -6, "TRAZA TEMPORAL / HISTORIAL DE DECISIONES", out var logBox);
+        _pLog = MakeWindow("log", "TRAZA TEMPORAL / HISTORIAL DE DECISIONES", new Rect2(6, 510, 520, 204), out var logBox);
         var filters = new HBoxContainer();
         filters.AddThemeConstantOverride("separation", 3);
         foreach (var (id, name) in new[] { ("todo", "Todo"), ("decision", "Decisiones"), ("veto", "Vetos/fallos"), ("evento", "Eventos"), ("ag", "AG") })
@@ -126,18 +129,24 @@ public partial class Hud : CanvasLayer
         _log = new RichTextLabel { BbcodeEnabled = true, ScrollFollowing = true, SizeFlagsVertical = Control.SizeFlags.ExpandFill, SelectionEnabled = true };
         logBox.AddChild(_log);
 
-        // Panel E · control (abajo centro)
-        _pCtl = MakePanel(0.5f, 1, 0.5f, 1, -108, -210, 306, -6, "CONTROL DEL USUARIO / LABORATORIO", out var ctl);
+        // Panel E · control: columna vertical fija a la derecha (en móvil, cajón "Control")
+        _pCtl = MakePanel(1, 0, 1, 1, -184, 32, -6, -6, "CONTROL", out var ctlBox);
+        var ctlScroll = new ScrollContainer { SizeFlagsVertical = Control.SizeFlags.ExpandFill, HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled };
+        var ctl = new VBoxContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+        ctl.AddThemeConstantOverride("separation", 3);
+        ctlScroll.AddChild(ctl);
+        ctlBox.AddChild(ctlScroll);
         BuildControls(ctl);
 
         // Panel A (mini) · mapa (abajo derecha)
-        _pMap = MakePanel(1, 1, 1, 1, -328, -210, -6, -6, "MAPA 2D · creencia / verdad (T)", out var mapBox);
+        _pMap = MakeWindow("map", "MAPA 2D · creencia / verdad (T)", new Rect2(760, 510, 330, 204), out var mapBox);
         var hb = new HBoxContainer();
         hb.AddThemeConstantOverride("separation", 6);
         hb.SizeFlagsVertical = Control.SizeFlags.ExpandFill;
-        Map = new MiniMap { CustomMinimumSize = new Vector2(182, 182), MouseFilter = Control.MouseFilterEnum.Stop, TooltipText = "Clic: inspeccionar celda · Mayús+clic: barranco · Ctrl+clic: roca · Alt+clic: despejar" };
+        hb.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        Map = new MiniMap { CustomMinimumSize = new Vector2(150, 150), SizeFlagsHorizontal = Control.SizeFlags.ExpandFill, SizeFlagsVertical = Control.SizeFlags.ExpandFill, MouseFilter = Control.MouseFilterEnum.Stop, TooltipText = "Clic: inspeccionar celda · Mayús+clic: barranco · Ctrl+clic: roca · Alt+clic: despejar" };
         Map.Edit = (c, w) => Host.MapEdit(c, w);
-        Sparks = new Sparklines { CustomMinimumSize = new Vector2(118, 182), SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+        Sparks = new Sparklines { CustomMinimumSize = new Vector2(118, 150), SizeFlagsHorizontal = Control.SizeFlags.ExpandFill, SizeFlagsStretchRatio = 0.6f };
         hb.AddChild(Map);
         hb.AddChild(Sparks);
         mapBox.AddChild(hb);
@@ -145,7 +154,7 @@ public partial class Hud : CanvasLayer
         // franjas centrales
         _bannerBox = new PanelContainer { MouseFilter = Control.MouseFilterEnum.Ignore, Visible = false };
         _root.AddChild(_bannerBox);
-        Anchor(_bannerBox, 0.5f, 0, 0.5f, 0, -300, 34, 300, 62);
+        Anchor(_bannerBox, 0.5f, 0, 0.5f, 0, -390, 34, 210, 62);
         _banner = UiTheme.Label("", 12);
         _banner.HorizontalAlignment = HorizontalAlignment.Center;
         _banner.AutowrapMode = TextServer.AutowrapMode.WordSmart;
@@ -156,7 +165,7 @@ public partial class Hud : CanvasLayer
         _envStrip.AddThemeConstantOverride("outline_size", 4);
         _envStrip.MouseFilter = Control.MouseFilterEnum.Ignore;
         _root.AddChild(_envStrip);
-        Anchor(_envStrip, 0.5f, 0, 0.5f, 0, -300, 66, 300, 100);
+        Anchor(_envStrip, 0.5f, 0, 0.5f, 0, -390, 66, 210, 100);
         _envStrip.AutowrapMode = TextServer.AutowrapMode.WordSmart;
         _objective = UiTheme.Label("", 11, UiTheme.Accent);
         _objective.HorizontalAlignment = HorizontalAlignment.Center;
@@ -165,7 +174,7 @@ public partial class Hud : CanvasLayer
         _objective.AutowrapMode = TextServer.AutowrapMode.WordSmart;
         _objective.MouseFilter = Control.MouseFilterEnum.Ignore;
         _root.AddChild(_objective);
-        Anchor(_objective, 0.5f, 0, 0.5f, 0, -300, 466, 300, 504);
+        Anchor(_objective, 0.5f, 1, 0.5f, 1, -390, -250, 210, -214);
 
         // fin de misión
         _end = new PanelContainer { Visible = false };
@@ -223,7 +232,13 @@ public partial class Hud : CanvasLayer
             tabs.AddChild(b);
             _tabBtns.Add(b);
         }
-        tabs.AddChild(Big("Labs", () => Host.OpenLab(0), 13));
+        var labsBtn = Big("Labs ▾", () => { }, 13);
+        var labsMenu = new PopupMenu();
+        foreach (var n in new[] { "Lab RNA (en vivo)", "Lab Difuso (en vivo)", "Lab Genético (en vivo)", "Políticas", "Ayuda" }) labsMenu.AddItem(n);
+        labsMenu.IndexPressed += i => Host.OpenLab((int)i);
+        labsBtn.AddChild(labsMenu);
+        labsBtn.Pressed += () => labsMenu.Popup(new Rect2I((Vector2I)labsBtn.GetScreenPosition() + new Vector2I(0, -150), new Vector2I(220, 0)));
+        tabs.AddChild(labsBtn);
         tabs.AddChild(Big("?", () => Host.OpenLab(4), 13));
         _uiHit.Add(tabs);
 
@@ -276,9 +291,32 @@ public partial class Hud : CanvasLayer
 
     public void OpenDrawer(int k) { if (_drawers.Length > 0 && k != _openDrawer) ToggleDrawer(k); }
 
+    /// <summary>Móvil: abre/cierra el cajón que corresponde a una ventana del HUD.</summary>
+    public void ToggleDrawerFor(string id)
+    {
+        int k = System.Array.IndexOf(new[] { "tele", "dec", "log", "map", "ctl" }, id);
+        if (k >= 0) ToggleDrawer(k);
+    }
+
+    /// <summary>Móvil: un laboratorio abierto ocupa el lugar de los cajones.</summary>
+    public void CloseDrawersForLab()
+    {
+        if (_openDrawer >= 0) ToggleDrawer(_openDrawer);
+        SetMobileLabOpen(true);
+    }
+
+    /// <summary>Móvil: con un laboratorio abierto se ocultan la tarjeta de estado y la franja del objetivo.</summary>
+    public void SetMobileLabOpen(bool open)
+    {
+        if (!Platform.IsMobile) return;
+        if (_statusCard != null) _statusCard.Visible = !open && _openDrawer < 0;
+        _objective.Visible = !open && _openDrawer < 0;
+    }
+
     private void ToggleDrawer(int k)
     {
         _openDrawer = _openDrawer == k ? -1 : k;
+        if (_openDrawer >= 0) LabWindowsClosing?.Invoke();
         for (int i = 0; i < _drawers.Length; i++) _drawers[i].Visible = i == _openDrawer;
         for (int i = 0; i < _tabBtns.Count; i++) _tabBtns[i].AddThemeColorOverride("font_color", i == _openDrawer ? UiTheme.Accent : UiTheme.Text);
         bool open = _openDrawer >= 0;
@@ -305,8 +343,11 @@ public partial class Hud : CanvasLayer
     }
 
     /// <summary>¿El punto (coordenadas del lienzo) cae sobre la interfaz? Los toques ahí no van al terreno.</summary>
+    public event Action? LabWindowsClosing;
+
     public bool IsOverUi(Vector2 p)
     {
+        if (WindowManager.IsOverAny(p)) return true;
         foreach (var c in _uiHit)
             if (c.IsVisibleInTree() && c.GetGlobalRect().HasPoint(p)) return true;
         return false;
@@ -319,7 +360,7 @@ public partial class Hud : CanvasLayer
         var e = m.Env;
         string wx = m.Planet.HasRain && e.RainMmH > 0.2f ? $"lluvia {e.RainMmH:0.0} mm/h" : e.DustOpacity > 0.3f ? $"polvo {e.DustOpacity:0.00}" : $"vis {(e.Visibility >= 1000 ? (e.Visibility / 1000).ToString("0.0") + " km" : e.Visibility.ToString("0") + " m")}";
         _status.Text = $"Batería {m.Rover.BatteryPct:0} % ({m.Rover.BatteryWh:0} Wh)\nT int {m.Rover.TempInt:0} °C · ext {e.TempAt(m.Rover.Pos):0} °C\n" +
-                       (m.Planet.AirDensity > 0 ? $"Viento {e.WindGust:0}/{m.Planet.WindLimit:0} m/s · {wx}" : wx) +
+                       (m.Planet.AirDensity > 0 ? $"Viento {e.WindGust:0}/{m.WindLimitMs:0} m/s · {wx}" : wx) +
                        $"\n{(m.LastDecision != null ? SafetySupervisor.ActionName(m.LastDecision.Action) + " " + m.LastDecision.Code : "")} · integridad {m.Rover.Integrity:0} %";
         _status.AddThemeColorOverride("font_color", m.Rover.BatteryPct < 15 ? UiTheme.Crit : UiTheme.Text);
     }
@@ -330,6 +371,29 @@ public partial class Hud : CanvasLayer
         sc.AddChild(content);
         return sc;
     }
+
+    /// <summary>Ventana flotante del HUD (en móvil queda fija como cajón).</summary>
+    private FloatPanel MakeWindow(string id, string title, Rect2 rect, out VBoxContainer box)
+    {
+        var w = new FloatPanel(id, title, rect) { Docked = Platform.IsMobile };
+        _root.AddChild(w);
+        box = w.Content;
+        return w;
+    }
+
+    private bool _layoutDone;
+
+    /// <summary>Disposición inicial (guardada o "completa"). Se llama cuando la interfaz ya tiene tamaño.</summary>
+    public void InitLayout()
+    {
+        if (_layoutDone || Platform.IsMobile) return;
+        _layoutDone = true;
+        WindowManager.Load(_root.Size);
+        _root.Resized += WindowManager.ClampAll;
+        RefreshWindowButtons();
+    }
+
+    public Vector2 UiSize => _root.Size;
 
     private PanelContainer MakePanel(float al, float at, float ar, float ab, float ol, float ot, float or, float ob, string title, out VBoxContainer box)
     {
@@ -343,65 +407,105 @@ public partial class Hud : CanvasLayer
         return p;
     }
 
+    private readonly Dictionary<string, Button> _winBtns = new();
+    private HSlider? _opacity;
+
     private void BuildControls(VBoxContainer v)
     {
-        HBoxContainer Row()
+        GridContainer Grid(int cols)
         {
-            var h = new HBoxContainer();
-            h.AddThemeConstantOverride("separation", 3);
-            v.AddChild(h);
-            return h;
+            var g = new GridContainer { Columns = cols, SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+            g.AddThemeConstantOverride("h_separation", 3);
+            g.AddThemeConstantOverride("v_separation", 3);
+            v.AddChild(g);
+            return g;
         }
-        var r1 = Row();
-        _playBtn = UiTheme.Button("▶ Ejecutar", () => Host.TogglePlay(), "Iniciar/pausar la simulación (Espacio)");
-        r1.AddChild(_playBtn);
-        r1.AddChild(UiTheme.Button("⏭ Un paso", () => Host.StepOnce(), "Ejecutar un solo ciclo observar→decidir→actuar (N)"));
-        r1.AddChild(UiTheme.Button("⟲ Reiniciar", () => Host.Restart(), "Volver a la configuración (R)"));
-        r1.AddChild(UiTheme.Button("⇩ Exportar", () => Host.Export(), "Exportar traza CSV y resultado JSON (F12)"));
-        _modeBtn = UiTheme.Button("Modo: CLIC", () => Host.ToggleMode(), "Destino por clic ↔ misión autónoma (M). En modo clic, haga clic en el terreno: el rover evalúa y navega hasta el destino");
-        r1.AddChild(_modeBtn);
-        var r2 = Row();
-        r2.AddChild(UiTheme.Label("Velocidad", 11, UiTheme.Dim));
-        foreach (float s in new[] { 1f, 2f, 4f, 8f })
+        Button B(Container parent, string text, Action a, string tip)
         {
-            var b = UiTheme.Button($"{s}×", () => Host.SetSpeed(s), "Velocidad de la simulación (1-4)");
-            _speedBtns.Add(b);
-            r2.AddChild(b);
+            var b = UiTheme.Button(text, a, tip);
+            b.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+            b.ClipText = true;
+            parent.AddChild(b);
+            return b;
         }
-        r2.AddChild(UiTheme.Button("Replanificar", () => Host.Replan(), "Forzar una corrida del AG (P)"));
-        _riskBtn = UiTheme.Button("Riesgo ✓", () => Host.ToggleRisk(), "Mostrar el mapa de riesgo estimado por la RNA (V)");
-        _truthBtn = UiTheme.Button("Verdad", () => Host.ToggleTruth(), "Mostrar la verdad del simulador (T) — el rover NO la conoce");
-        r2.AddChild(_riskBtn);
-        r2.AddChild(_truthBtn);
-        v.AddChild(UiTheme.Label("Inyectar eventos durante la ejecución:", 11, UiTheme.Dim));
-        var grid = new GridContainer { Columns = 6 };
-        grid.AddThemeConstantOverride("h_separation", 3);
-        grid.AddThemeConstantOverride("v_separation", 3);
+        void Header(string t) => v.AddChild(UiTheme.Label(t, 10, UiTheme.Dim));
+
+        Header("SIMULACIÓN");
+        _playBtn = B(v, "▶ Ejecutar", () => Host.TogglePlay(), "Iniciar/pausar la simulación (Espacio)");
+        _playBtn.AddThemeFontSizeOverride("font_size", 13);
+        var g1 = Grid(2);
+        B(g1, "⏭ Un paso", () => Host.StepOnce(), "Un solo ciclo observar→decidir→actuar (N)");
+        B(g1, "⟲ Reiniciar", () => Host.Restart(), "Volver a la configuración (R)");
+        B(g1, "⇩ Exportar", () => Host.Export(), "Exportar traza CSV y resultado JSON (F12)");
+        _modeBtn = B(g1, "Modo: CLIC", () => Host.ToggleMode(), "Destino por clic ↔ misión autónoma (M)");
+        B(v, "✕ Cancelar destino", () => Host.CancelDestination(), "Cancelar el destino (clic derecho)");
+        var gs = Grid(4);
+        foreach (float sp in new[] { 1f, 2f, 4f, 8f })
+            _speedBtns.Add(B(gs, $"{sp}×", () => Host.SetSpeed(sp), "Velocidad de la simulación (1-4)"));
+        var g2 = Grid(2);
+        B(g2, "Replanificar", () => Host.Replan(), "Forzar una corrida del AG (P)");
+        _riskBtn = B(g2, "Riesgo ✓", () => Host.ToggleRisk(), "Mapa de riesgo estimado por la RNA (V)");
+        _truthBtn = B(g2, "Verdad", () => Host.ToggleTruth(), "Verdad del simulador (T): el rover NO la conoce");
+        var cam = new HBoxContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+        cam.AddThemeConstantOverride("separation", 2);
+        g2.AddChild(cam);
+        B(cam, "⟲", () => Host.RotateCam(-1), "Girar cámara (Q)");
+        B(cam, "⟳", () => Host.RotateCam(1), "Girar cámara (E)");
+
+        Header("EVENTOS");
+        var ge = Grid(2);
         (string N, EventKind? K, string Tip)[] evs =
         {
             ("Sismo", EventKind.Sismo, "F1 · picos de aceleración y caída de rocas"),
             ("Tormenta", EventKind.Tormenta, "F2 · polvo (Marte), lluvia (Tierra), partículas solares (Mercurio), vientos (gigantes)"),
             ("Meteorito", EventKind.Meteorito, "F3 · cráter nuevo junto a la ruta"),
-            ("Fallo sensor", EventKind.FalloSensor, "F4 · NaN / saturación / atasco / contradicción en un sensor crítico (cicla)"),
+            ("Fallo sensor", EventKind.FalloSensor, "F4 · NaN / saturación / atasco / contradicción (cicla)"),
             ("Noche", EventKind.Noche, "F5 · forzar/quitar noche"),
-            ("Enlace", EventKind.BajaConectividad, "F6 · baja conectividad: órdenes con retraso, autonomía local"),
+            ("Enlace", EventKind.BajaConectividad, "F6 · baja conectividad: órdenes con retraso"),
             ("Ráfaga", EventKind.Rafaga, "F7 · ráfaga de viento"),
             ("Biofirma", EventKind.Biofirma, "F8 · señal biológica anómala SIMULADA (nunca confirma vida)"),
-            ("Alien", EventKind.Alien, "F9 · objeto no identificado (ficción): obstáculo dinámico"),
+            ("Alien", EventKind.Alien, "F9 · objeto no identificado (ficción)"),
             ("Bat. 12 %", EventKind.BateriaBaja, "F10 · caso CA-03"),
             ("Remoción", EventKind.Remocion, "F11 · remoción en masa (Tierra)"),
             ("Reparar", null, "Mayús+F4 · restablecer sensores"),
         };
         foreach (var (n, k, tip) in evs)
-            grid.AddChild(UiTheme.Button(n, () => { if (k is EventKind kk) Host.Inject(kk); else Host.RepairSensors(); }, tip));
-        v.AddChild(grid);
-        var r4 = Row();
-        r4.AddChild(UiTheme.Label("Labs:", 11, UiTheme.Dim));
-        r4.AddChild(UiTheme.Button("RNA", () => Host.OpenLab(0), "Laboratorio RNA (Tab)"));
-        r4.AddChild(UiTheme.Button("Difuso", () => Host.OpenLab(1), "Laboratorio difuso"));
-        r4.AddChild(UiTheme.Button("Genético", () => Host.OpenLab(2), "Laboratorio genético"));
-        r4.AddChild(UiTheme.Button("Políticas", () => Host.OpenLab(3), "Comparación de políticas: 20 semillas × ablaciones"));
-        r4.AddChild(UiTheme.Button("Ayuda", () => Host.OpenLab(4), "Controles, leyenda y supuestos (H)"));
+            B(ge, n, () => { if (k is EventKind kk) Host.Inject(kk); else Host.RepairSensors(); }, tip);
+
+        Header("DRON EXPLORADOR");
+        var gd = Grid(2);
+        _droneBtn = B(gd, "Desplegar (D)", () => Host.DroneAction(), "Desplegar el dron a la celda bajo el cursor o a la zona más incierta de la ruta (D); en vuelo: ordenar regreso");
+        _droneAutoBtn = B(gd, "Auto ✓", () => Host.ToggleDroneAuto(), "Despliegue automático por decisión difusa (conveniencia ≥ 0,60)");
+
+        Header("VENTANAS");
+        var gw = Grid(2);
+        (string Id, string N, string Tip)[] wins =
+        {
+            ("tele", "Telemetría", "Sensores con ruido y validación"), ("dec", "Decisión", "RNA → difuso + AG → supervisor"),
+            ("log", "Bitácora", "Historial de decisiones"), ("map", "Mapa 2D", "Creencia / verdad"),
+            ("lab_rna", "Lab RNA", "Red neuronal en vivo (Tab)"), ("lab_fuzzy", "Lab Difuso", "Lógica difusa en vivo"),
+            ("lab_ga", "Lab Genético", "Algoritmo genético en vivo"), ("lab_policies", "Políticas", "20 semillas × ablaciones"),
+            ("lab_help", "Ayuda", "Controles, leyenda y supuestos (H)"),
+        };
+        foreach (var (id, n, tip) in wins)
+            _winBtns[id] = B(gw, n, () => Host.ToggleWindow(id), tip);
+        var gp = Grid(3);
+        B(gp, "Limpia", () => { WindowManager.ApplyPreset("limpia", _root.Size); RefreshWindowButtons(); }, "Solo el mundo: ver al robot y el ambiente");
+        B(gp, "Análisis", () => { WindowManager.ApplyPreset("analisis", _root.Size); RefreshWindowButtons(); }, "Laboratorios en vivo + decisión");
+        B(gp, "Paneles", () => { WindowManager.ApplyPreset("completa", _root.Size); RefreshWindowButtons(); }, "Paneles de misión (disposición original)");
+        var op = new HBoxContainer();
+        op.AddChild(UiTheme.Label("Opacidad", 10, UiTheme.Dim));
+        _opacity = new HSlider { MinValue = 0.25, MaxValue = 1, Step = 0.05, Value = 1, SizeFlagsHorizontal = Control.SizeFlags.ExpandFill, CustomMinimumSize = new Vector2(70, 16), TooltipText = "Transparencia del fondo de las ventanas" };
+        _opacity.ValueChanged += val => { foreach (var w in WindowManager.All) w.SelfModulate = new Color(1, 1, 1, (float)val); };
+        op.AddChild(_opacity);
+        v.AddChild(op);
+        WindowManager.AnyChanged += RefreshWindowButtons;
+    }
+
+    public void RefreshWindowButtons()
+    {
+        foreach (var (id, b) in _winBtns)
+            b.AddThemeColorOverride("font_color", WindowManager.IsOpen(id) ? UiTheme.Accent : UiTheme.Dim);
     }
 
     public void Bind(Mission m)
@@ -461,6 +565,12 @@ public partial class Hud : CanvasLayer
         if (Platform.IsMobile) UpdateMobileStatus(m);
         _playBtn.Text = Host.Running ? "Ⅱ Pausa" : "▶ Ejecutar";
         _modeBtn.Text = m.Config.ClickMode ? "Modo: CLIC" : "Modo: AUTO";
+        var dr = m.Drone;
+        _droneBtn.Disabled = !dr.Available;
+        _droneBtn.Text = !dr.Available ? "Dron n/d" : dr.Flying ? (dr.Mode == DroneMode.Regresando ? "Regresando…" : "Regresar (D)") : "Desplegar (D)";
+        _droneBtn.TooltipText = dr.Available ? _droneBtn.TooltipText : "Dron no disponible: " + dr.Unavailable;
+        _droneAutoBtn.Text = dr.Auto ? "Auto ✓" : "Auto";
+        _droneAutoBtn.Disabled = !dr.Available;
         for (int i = 0; i < _speedBtns.Count; i++)
             _speedBtns[i].AddThemeColorOverride("font_color", Mathf.IsEqualApprox(Host.SimSpeed, new[] { 1f, 2f, 4f, 8f }[i]) ? UiTheme.Accent : UiTheme.Text);
         // banner con el último evento importante
@@ -479,7 +589,7 @@ public partial class Hud : CanvasLayer
 
         var e = m.Env;
         var p = m.Planet;
-        string wind = p.AirDensity <= 0 ? "sin atmósfera" : $"viento {e.WindSpeed:0.0} m/s {MathX.Compass(e.WindDirDeg)} (ráfaga {e.WindGust:0.0} / límite {p.WindLimit:0})";
+        string wind = p.AirDensity <= 0 ? "sin atmósfera" : $"viento {e.WindSpeed:0.0} m/s {MathX.Compass(e.WindDirDeg)} (ráfaga {e.WindGust:0.0} / límite {m.WindLimitMs:0})";
         string rain = p.HasRain ? $" · lluvia {e.RainMmH:0.0} mm/h (24 h ≈ {e.Rain24h:0} mm)" : "";
         string events = e.Events.Count == 0 ? "" : "\nEventos activos: " + string.Join(" · ", e.Events.Select(x => x.Kind + (x.Remaining > 0 ? $" ({x.Remaining})" : "")));
         _envStrip.Text = $"{(e.IsDay ? "☀ día" : "☾ noche")} · sol {e.SunElev * 100:0}% · T ext {e.TempAt(m.Rover.Pos):0.0} °C · {wind}{rain} · vis {(e.Visibility >= 1000 ? (e.Visibility / 1000).ToString("0.0") + " km" : e.Visibility.ToString("0") + " m")} · polvo {e.DustOpacity:0.00} · {e.SolarIrradiance():0} W/m²{events}";
@@ -487,7 +597,7 @@ public partial class Hud : CanvasLayer
         {
             int left = Math.Max(0, m.Route.Count - 1 - m.RouteIdx);
             _objective.Text = m.HasDestination
-                ? $"DESTINO: {m.TargetName} {m.Target} · {m.DestReport?.VerdictText} · faltan {left} pasos ({left * WorldMap.CellM:0} m) · muestras {m.Samples}/{m.Map.Sites.Count}{(Platform.IsMobile ? "" : " · clic derecho = cancelar")}"
+                ? $"DESTINO: {m.TargetName} {m.Target} · {m.DestReport?.VerdictText} · faltan {left} pasos ({left * m.Map.CellM:0} m) · muestras {m.Samples}/{m.Map.Sites.Count}{(Platform.IsMobile ? "" : " · clic derecho = cancelar")}"
                 : m.PendingDestination != null ? "Destino en tránsito por el enlace degradado…"
                 : $"SIN DESTINO · {(Platform.IsMobile ? "toque el terreno" : "haga clic en el terreno (o en el mapa 2D)")} para enviar el rover · muestras {m.Samples}/{m.Map.Sites.Count} · bodega {m.Rover.SampleKg:0.0}/{m.Rover.SampleCapKg:0} kg";
         }

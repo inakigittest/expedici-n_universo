@@ -28,6 +28,10 @@ public partial class RobotView : Node3D
 
     public MechRig Rig { get; private set; } = null!;
     public bool Probe;
+    public bool Heli;                 // helicóptero: modelo 3D de primitivas en vez del mech
+    public float HeliAglM;            // altura sobre el terreno informada por la simulación
+    private Node3D? _heli, _rotor, _tailRotor;
+    private float _heliAlt;
     public bool Busy => _moveT < _moveDur;
 
     private Vector3 _from, _to, _facing = new(1, 0, 0);
@@ -41,6 +45,7 @@ public partial class RobotView : Node3D
     {
         Rig = new MechRig { Name = "Rig" };
         AddChild(Rig);
+        if (Heli) BuildHeli();
         foreach (var (slot, part) in Probe ? ProbeLoadout : RoverLoadout)
             Rig.Equip(slot, part);
         Rig.Play("idle");
@@ -114,6 +119,7 @@ public partial class RobotView : Node3D
             p.Y = Grid.HeightAt(p.X, p.Z);
             GlobalPosition = p;
         }
+        if (Heli) UpdateHeli(dt);
         if (Probe)
             Rig.Position = new Vector3(0, 2.2f + 0.25f * MathF.Sin(_bob * 2.2f), 0);
         else
@@ -135,6 +141,66 @@ public partial class RobotView : Node3D
         }
         else Rig.ClearUpper();
         Rig.Play(Probe ? "hover" : Busy ? "walk" : "idle");
+    }
+
+    /// <summary>Helicóptero no tripulado de primitivas (escala exagerada ×4 para que se lea sobre celdas de 30 m).</summary>
+    private void BuildHeli()
+    {
+        Rig.Visible = false;
+        _heli = new Node3D { Name = "Heli" };
+        AddChild(_heli);
+        StandardMaterial3D M(string hex, float rough = 0.5f, float metal = 0.1f) => new() { AlbedoColor = new Color(hex), Roughness = rough, Metallic = metal };
+        var body = M("e9edf0");
+        var accent = M("d9622b");
+        var dark = M("2a2e35", 0.4f, 0.3f);
+        var glass = new StandardMaterial3D { AlbedoColor = new Color(0.15f, 0.3f, 0.42f, 0.8f), Transparency = BaseMaterial3D.TransparencyEnum.Alpha, Roughness = 0.05f, Metallic = 0.6f };
+        MeshInstance3D Add(Node3D parent, Mesh mesh, Material mat, Vector3 pos, Vector3? rotDeg = null)
+        {
+            var mi = new MeshInstance3D { Mesh = mesh, MaterialOverride = mat, Position = pos, RotationDegrees = rotDeg ?? Vector3.Zero };
+            parent.AddChild(mi);
+            return mi;
+        }
+        Add(_heli, new CapsuleMesh { Radius = 0.5f, Height = 2.1f }, body, new Vector3(0, 0.9f, 0), new Vector3(0, 0, 90));
+        Add(_heli, new BoxMesh { Size = new Vector3(1.4f, 0.12f, 1.02f) }, accent, new Vector3(-0.1f, 0.95f, 0));
+        Add(_heli, new SphereMesh { Radius = 0.46f, Height = 0.8f }, glass, new Vector3(0.75f, 1.0f, 0));
+        Add(_heli, new CylinderMesh { TopRadius = 0.08f, BottomRadius = 0.16f, Height = 2.3f }, body, new Vector3(-1.9f, 1.05f, 0), new Vector3(0, 0, 90));
+        Add(_heli, new BoxMesh { Size = new Vector3(0.45f, 0.75f, 0.06f) }, accent, new Vector3(-3.0f, 1.35f, 0), new Vector3(0, 0, -15));
+        Add(_heli, new BoxMesh { Size = new Vector3(0.5f, 0.05f, 0.8f) }, body, new Vector3(-2.7f, 1.05f, 0));
+        foreach (float z in new[] { -0.55f, 0.55f })
+        {
+            Add(_heli, new CylinderMesh { TopRadius = 0.05f, BottomRadius = 0.05f, Height = 2.2f }, dark, new Vector3(0.05f, 0.08f, z), new Vector3(0, 0, 90));
+            Add(_heli, new CylinderMesh { TopRadius = 0.035f, BottomRadius = 0.035f, Height = 0.5f }, dark, new Vector3(0.45f, 0.32f, z * 0.85f), new Vector3(z * 20, 0, 0));
+            Add(_heli, new CylinderMesh { TopRadius = 0.035f, BottomRadius = 0.035f, Height = 0.5f }, dark, new Vector3(-0.45f, 0.32f, z * 0.85f), new Vector3(z * 20, 0, 0));
+        }
+        Add(_heli, new CylinderMesh { TopRadius = 0.07f, BottomRadius = 0.09f, Height = 0.35f }, dark, new Vector3(0, 1.55f, 0));
+        _rotor = new Node3D { Position = new Vector3(0, 1.75f, 0) };
+        _heli.AddChild(_rotor);
+        Add(_rotor, new BoxMesh { Size = new Vector3(6.2f, 0.04f, 0.22f) }, dark, Vector3.Zero);
+        Add(_rotor, new BoxMesh { Size = new Vector3(0.22f, 0.04f, 6.2f) }, dark, Vector3.Zero);
+        Add(_rotor, new CylinderMesh { TopRadius = 3.1f, BottomRadius = 3.1f, Height = 0.01f, RadialSegments = 32 },
+            new StandardMaterial3D { AlbedoColor = new Color(0.85f, 0.9f, 0.95f, 0.16f), Transparency = BaseMaterial3D.TransparencyEnum.Alpha, ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded }, Vector3.Zero);
+        _tailRotor = new Node3D { Position = new Vector3(-3.05f, 1.3f, 0.1f) };
+        _heli.AddChild(_tailRotor);
+        Add(_tailRotor, new BoxMesh { Size = new Vector3(0.9f, 0.1f, 0.03f) }, dark, Vector3.Zero);
+        Add(_tailRotor, new BoxMesh { Size = new Vector3(0.1f, 0.9f, 0.03f) }, dark, Vector3.Zero);
+        _heli.AddChild(new OmniLight3D { LightColor = new Color("ff3b30"), LightEnergy = 0.8f, OmniRange = 2.5f, Position = new Vector3(-0.2f, 0.4f, 0) });
+    }
+
+    private void UpdateHeli(float dt)
+    {
+        if (_heli == null) return;
+        bool flying = HeliAglM > 0.5f;
+        // altura visual: proporcional a la real (90 m) pero acotada para que el helicóptero siga en cuadro
+        float goal = flying ? Mathf.Clamp(HeliAglM * Grid.V, 3.5f, 9f) : 0f;
+        _heliAlt = Mathf.Lerp(_heliAlt, goal, 1 - Mathf.Exp(-2.2f * dt));
+        float yaw = Mathf.Atan2(-_facing.Z, _facing.X);
+        float pitch = Busy && flying ? -10f : 0f;
+        float cur = Mathf.RadToDeg(_heli.Rotation.Z);
+        _heli.Rotation = new Vector3(0, yaw, Mathf.DegToRad(Mathf.Lerp(cur, pitch, 1 - Mathf.Exp(-4f * dt))));
+        _heli.Position = new Vector3(0, _heliAlt + (flying ? 0.15f * MathF.Sin(_bob * 1.7f) : 0), 0);
+        float spin = flying ? 32f : _heliAlt > 0.05f ? 14f : 3f;
+        _rotor!.RotateY(spin * dt);
+        _tailRotor!.RotateZ(spin * 1.6f * dt);
     }
 
     private static Decal MakeBlobShadow()
@@ -162,7 +228,22 @@ public partial class CameraRig : Node3D
     public static readonly float[] ZoomLevels = { 1f, 1.5f, 2f, 2.5f, 3f, 4f, 5f, 6.5f };
     public Camera3D Camera { get; private set; } = null!;
     private float _yawDeg = 0, _baseSize;
-    private const float Distance = 45f;
+    private float _distance = 45f;
+    public float MaxZoom = 7f;
+
+    /// <summary>Mapas a escala real (km): cámara más lejos (el relieve puede superar los 100 m de altura de mundo) y más zoom.</summary>
+    public void ConfigureForLarge(bool large)
+    {
+        _distance = large ? 420f : 45f;
+        MaxZoom = large ? 48f : 7f;
+        float p = Mathf.DegToRad(MechSkeletonData.Get().Pitch);
+        Camera.Position = new Vector3(0, Mathf.Sin(p), Mathf.Cos(p)) * _distance;
+        Camera.Far = large ? 2400f : 300f;
+        EnvironmentFx.FogScale = 45f / _distance;
+        Zoom = Mathf.Min(Zoom, MaxZoom);
+    }
+
+    private float[] Levels => MaxZoom > 10 ? new[] { 1f, 1.5f, 2f, 3f, 4f, 6f, 9f, 13f, 20f, 30f, 48f } : ZoomLevels;
 
     public override void _Ready()
     {
@@ -173,7 +254,7 @@ public partial class CameraRig : Node3D
         Camera = new Camera3D
         {
             Projection = Camera3D.ProjectionType.Orthogonal, Size = _baseSize * Zoom, Near = 0.5f, Far = 300f,
-            Position = new Vector3(0, Mathf.Sin(p), Mathf.Cos(p)) * Distance, Rotation = new Vector3(-p, 0, 0),
+            Position = new Vector3(0, Mathf.Sin(p), Mathf.Cos(p)) * _distance, Rotation = new Vector3(-p, 0, 0),
         };
         AddChild(Camera);
         Camera.MakeCurrent();
@@ -191,16 +272,17 @@ public partial class CameraRig : Node3D
 
     public void Wheel(int step)
     {
-        int i = Array.FindIndex(ZoomLevels, z => z >= Zoom - 0.01f);
-        i = Mathf.Clamp((i < 0 ? ZoomLevels.Length - 1 : i) + step, 0, ZoomLevels.Length - 1);
-        Zoom = ZoomLevels[i];
+        var lv = Levels;
+        int i = Array.FindIndex(lv, z => z >= Zoom - 0.01f);
+        i = Mathf.Clamp((i < 0 ? lv.Length - 1 : i) + step, 0, lv.Length - 1);
+        Zoom = lv[i];
         CreateTween().TweenProperty(Camera, "size", _baseSize * Zoom, 0.18).SetTrans(Tween.TransitionType.Cubic).SetEase(Tween.EaseType.Out);
     }
 
     /// <summary>Zoom continuo (pellizco en pantallas táctiles).</summary>
     public void ZoomBy(float factor)
     {
-        Zoom = Mathf.Clamp(Zoom * factor, 0.8f, 7f);
+        Zoom = Mathf.Clamp(Zoom * factor, 0.8f, MaxZoom);
         Camera.Size = _baseSize * Zoom;
     }
 
@@ -235,6 +317,8 @@ public partial class CameraRig : Node3D
 /// <summary>Cielo, sol, niebla y partículas (lluvia/polvo) según el estado ambiental de la simulación.</summary>
 public partial class EnvironmentFx : Node3D
 {
+    /// <summary>La niebla se escala con la distancia de la cámara (mapas a escala real la alejan).</summary>
+    public static float FogScale = 1f;
     public SimEnvironment? Env;
     public Node3D? Follow;
     private WorldEnvironment _world = null!;
@@ -301,7 +385,7 @@ public partial class EnvironmentFx : Node3D
         env.BackgroundColor = sky.Lerp(_fog, Mathf.Clamp(e.DustOpacity * 0.8f, 0, 0.8f));
         env.AmbientLightColor = sky.Lerp(Colors.White, 0.35f);
         env.AmbientLightEnergy = 0.25f + 0.45f * day;
-        float fogD = Mathf.Clamp(e.DustOpacity * 0.012f + (e.P.HasRain ? e.RainMmH * 0.00035f : 0) + (e.P.Style is TerrainStyle.Venus or TerrainStyle.Gaseoso ? 0.003f : 0), 0, 0.013f);
+        float fogD = FogScale * Mathf.Clamp(e.DustOpacity * 0.012f + (e.P.HasRain ? e.RainMmH * 0.00035f : 0) + (e.P.Style is TerrainStyle.Venus or TerrainStyle.Gaseoso ? 0.003f : 0), 0, 0.013f);
         env.FogEnabled = fogD > 0.001f;
         env.FogLightColor = _fog.Lerp(_skyNight, 1 - day);
         env.FogDensity = fogD;

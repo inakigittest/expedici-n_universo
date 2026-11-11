@@ -52,12 +52,34 @@ public static class HeadlessRunner
             string planet = diag[7..];
             var p = PlanetProfile.Get(planet);
             int seed = args.Where(a => a.StartsWith("--seed=")).Select(a => int.Parse(a[7..])).DefaultIfEmpty(42).First();
-            var m = new Mission(new MissionConfig { Mode = MissionMode.Autonomo, PlanetId = planet, Probe = !p.SolidSurface, Seed = seed, MaxSteps = 400 }, rna);
-            while (!m.Finished) m.Step();
-            GD.Print($"[Diag] {p.Name}: {Mission.StateName(m.State)} · {m.EndReason}");
+            string? scId = args.Where(a => a.StartsWith("--scenario=")).Select(a => a[11..]).FirstOrDefault();
+            var swGen = System.Diagnostics.Stopwatch.StartNew();
+            var sc = scId != null ? Scenarios.Load(scId) : null;
+            double loadMs = swGen.Elapsed.TotalMilliseconds;
+            var m = new Mission(new MissionConfig { Mode = MissionMode.Autonomo, PlanetId = sc != null ? "tierra" : planet, Probe = sc == null && !p.SolidSurface, Seed = seed, MaxSteps = 400, Scenario = sc, Heli = args.Contains("--heli") }, rna);
+            double genMs = swGen.Elapsed.TotalMilliseconds - loadMs;
+            var stepMs = new System.Collections.Generic.List<double>();
+            while (!m.Finished)
+            {
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                m.Step();
+                stepMs.Add(sw.Elapsed.TotalMilliseconds);
+            }
+            if (sc != null)
+                GD.Print($"[Diag] Escenario {sc.Consulta}: {m.Map.N}×{m.Map.N} celdas de {m.Map.CellM} m · carga {loadMs:0} ms · generación {genMs:0} ms · paso medio {stepMs.Average():0.0} ms · p95 {stepMs.OrderBy(x => x).ElementAt((int)(stepMs.Count * 0.95)):0.0} ms · máx {stepMs.Max():0} ms · {stepMs.Count} pasos · {m.Map.Calibration}");
+            if (sc != null)
+            {
+                var dd = m.Map.BfsDistance(m.Map.Start, m.Map.Passable);
+                int inside = m.Map.Inside!.Count(x => x), reach = dd.Count(x => x >= 0);
+                GD.Print($"[Diag] celdas en polígono {inside} · alcanzables desde la base {reach} ({(float)reach / inside:P0}) · sitios {m.Map.Sites.Count} · refugios {m.Map.Refuges.Count} · base {m.Map.Start} · pendientes calc {string.Join(" ", m.Map.SlopeHistogram.Select(b => b.ToString("P0")))} vs informe {string.Join(" ", sc.SlopeBins.Select(b => b.ToString("P0")))}");
+            }
+            GD.Print($"[Diag] {m.WorldName}: {Mission.StateName(m.State)} · {m.EndReason}");
             foreach (var g in m.Trace.GroupBy(r => r.Code + " " + r.Action).OrderByDescending(g => g.Count()))
                 GD.Print($"[Diag] {g.Count(),4} × {g.Key} · ej: {g.First().Reason}");
             foreach (var l in m.Log.TakeLast(25)) GD.Print($"[Diag] T+{l.Step:0000} [{l.Kind}] {l.Text}");
+            if (args.Contains("--trail")) GD.Print($"[DiagTrail] ruta {m.Route.Count} idx {m.RouteIdx} objetivo {m.Target} · últimos: {string.Join(" ", m.Trail.TakeLast(30))}");
+            if (args.Contains("--full-log")) foreach (var l in m.Log.Take(160)) GD.Print($"[DiagLog] T+{l.Step:0000} [{l.Kind}] {l.Text[..Math.Min(170, l.Text.Length)]}");
+            if (args.Contains("--ag-log")) foreach (var l in m.Log.Where(l => l.Kind == "ag")) GD.Print($"[DiagAG] T+{l.Step:0000} {l.Text[..Math.Min(140, l.Text.Length)]}");
             return true;
         }
         if (bench != null)
@@ -162,6 +184,19 @@ public static class HeadlessRunner
         Check("Destino por clic: evalúa, esquiva el barranco imprevisto y llega", evaluated && md.Rover.Pos == goal && md.Falls == 0,
             $"{md.DestReport?.VerdictText} · {md.Rover.Pos} vs {goal} · vetos {md.Vetoes} · replan {md.Replans} · pasos {md.StepCount}");
 
+        // dron explorador: despega, escanea, actualiza las creencias y vuelve; no vuela sin atmósfera
+        var mdr = new Mission(new MissionConfig { Mode = MissionMode.Autonomo, PlanetId = "marte", Seed = 33 }, rna);
+        mdr.Drone.Auto = false;
+        mdr.Step();
+        int obsBefore = Enumerable.Range(0, mdr.Map.N * mdr.Map.N).Count(i => mdr.Belief.Observed[i]);
+        bool launched = mdr.DeployDrone(mdr.Map.Clamp(mdr.Rover.Pos + new Cell(8, -8)), "operador");
+        for (int i = 0; i < 80 && mdr.Drone.Flying && !mdr.Finished; i++) mdr.Step();
+        int obsAfter = Enumerable.Range(0, mdr.Map.N * mdr.Map.N).Count(i => mdr.Belief.Observed[i]);
+        Check("Dron: despega, escanea y vuelve a acoplarse", launched && !mdr.Drone.Flying && mdr.Drone.LastScan != null && obsAfter > obsBefore + 30,
+            $"{mdr.Drone.LastScan?.Summary} · celdas observadas {obsBefore}→{obsAfter} · batería {mdr.Drone.BatteryPct:0} %");
+        var mme = new Mission(new MissionConfig { Mode = MissionMode.Autonomo, PlanetId = "mercurio", Seed = 1 }, rna);
+        Check("Dron no disponible sin atmósfera (Mercurio)", !mme.DroneCanDeploy(out var whyNot) && whyNot.Contains("atmósfera"), whyNot);
+
         // una misión autónoma por planeta, sin excepciones
         foreach (var p in PlanetProfile.All)
         {
@@ -184,6 +219,34 @@ public static class HeadlessRunner
         File.WriteAllText(Path.Combine(dir, "selftest_traza.csv"), me.TraceCsv());
         File.WriteAllText(Path.Combine(dir, "selftest_resultado.json"), me.ResultJson());
         Check("Exportación CSV/JSON", File.Exists(Path.Combine(dir, "selftest_traza.csv")), dir);
+
+        // escenarios GeoClick a escala real: área del polígono = área del informe, base conectada y sitios alcanzables
+        int scOk = 0;
+        var scDetail = new System.Collections.Generic.List<string>();
+        foreach (var meta in Scenarios.All)
+        {
+            var g = Scenarios.Load(meta.Id)!;
+            var map = new WorldMap(PlanetProfile.Get("tierra"), g, 7, 1);
+            float areaKm2 = map.Inside!.Count(x => x) * map.CellM * map.CellM / 1e6f;
+            var dist = map.BfsDistance(map.Start, map.Passable);
+            int reachableSites = map.Sites.Count(s => dist[map.Idx(s.Cell)] >= 0);
+            bool ok = MathF.Abs(areaKm2 - g.AreaKm2) / g.AreaKm2 < 0.03f && reachableSites >= 4 && map.Refuges.Count == 2 && map.Refuges.All(r => dist[map.Idx(r)] >= 0);
+            if (ok) scOk++;
+            scDetail.Add($"{g.Id} {areaKm2:0.0}/{g.AreaKm2:0.0} km² {reachableSites} sitios");
+        }
+        Check($"Escenarios GeoClick a escala ({Scenarios.All.Count})", Scenarios.All.Count > 0 && scOk == Scenarios.All.Count, string.Join(" · ", scDetail));
+        var sm = new Mission(new MissionConfig { Mode = MissionMode.Autonomo, PlanetId = "tierra", Seed = 7, MaxSteps = 120, Scenario = Scenarios.Load("40e9efb1") }, rna);
+        while (!sm.Finished) sm.Step();
+        // helicóptero: solo Tierra, potencia según densidad del aire, misión completa en un escenario a escala
+        Check("Helicóptero bloqueado fuera de la Tierra", new MissionConfig { PlanetId = "marte", Heli = true }.Validate() != null);
+        float mSea = HeliModel.Margin(HeliModel.Density(1.01325f, 15f)), mHigh = HeliModel.Margin(HeliModel.Density(1.01325f * MathF.Exp(-2.6f / 8.5f), 25f));
+        Check("Helicóptero: el margen de potencia cae con la altura y el calor", mHigh < mSea - 0.15f && HeliModel.HoverW(1.225f) is > 20000 and < 35000,
+            $"nivel del mar 15 °C {mSea:0.00} · 2600 m 25 °C {mHigh:0.00} · estacionario {HeliModel.HoverW(1.225f) / 1000:0.0} kW · crucero 25 m/s {HeliModel.ForwardW(1.225f, 25f) / 1000:0.0} kW");
+        var hm = new Mission(new MissionConfig { Mode = MissionMode.Autonomo, PlanetId = "tierra", Seed = 7, MaxSteps = 400, Heli = true, Scenario = Scenarios.Load("40e9efb1") }, rna);
+        while (!hm.Finished) hm.Step();
+        Check("Helicóptero: misión en escenario 40e9efb1", hm.State == MissionState.Exito && hm.Samples > 0 && !hm.Drone.Available,
+            $"{Mission.StateName(hm.State)} · muestras {hm.Samples} · {hm.Metrics()["distancia_m"]} m · batería {hm.Rover.BatteryPct:0} %");
+        Check("Misión en escenario 40e9efb1 (30 m/celda)", sm.Samples > 0 && sm.Rover.Collisions == 0, $"{Mission.StateName(sm.State)} · muestras {sm.Samples} · {sm.Metrics()["distancia_m"]} m · {sm.EndReason}");
         GD.Print($"[SelfTest] {(fails == 0 ? "TODO OK" : $"{fails} FALLOS")}");
         return fails == 0 ? 0 : 1;
     }
