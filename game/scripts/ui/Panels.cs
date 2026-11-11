@@ -97,21 +97,92 @@ public partial class TelemetryPanel : Control
 public partial class DecisionPanel : Control
 {
     public Mission? Mission;
+    /// <summary>Secciones a dibujar (el panel de decisión las usa todas; los resúmenes de laboratorio, solo las suyas).</summary>
+    public string Sections = "dest,rna,fuzzy,ga,sup,drone";
 
-    public override void _Process(double delta) => QueueRedraw();
+    public override void _Process(double delta)
+    {
+        if (IsVisibleInTree()) QueueRedraw();
+    }
 
     public override void _Draw()
     {
         var m = Mission;
         if (m == null) return;
+        bool S(string k) => Sections.Split(',').Contains(k);
         float w = Size.X, y = 0;
-        if (m.Config.ClickMode) y = DrawDestination(m, w, y) + 6;
-        y = DrawRna(m, w, y) + 6;
-        y = DrawFuzzy(m, w, y) + 6;
-        y = DrawGa(m, w, y) + 6;
-        y = DrawSupervisor(m, w, y) + 6;
-        y = DrawDrone(m, w, y);
+        if (m.Config.ClickMode && S("dest")) y = DrawDestination(m, w, y) + 6;
+        if (S("rna")) y = DrawRna(m, w, y) + 6;
+        if (S("rnakpi")) y = DrawRnaKpi(m, w, y) + 6;
+        if (S("fuzzy")) y = DrawFuzzy(m, w, y) + 6;
+        if (S("rules")) y = DrawRules(m, w, y) + 6;
+        if (S("ga")) y = DrawGa(m, w, y) + 6;
+        if (S("gahist")) y = DrawGaHistory(m, w, y) + 6;
+        if (S("sup")) y = DrawSupervisor(m, w, y) + 6;
+        if (S("drone")) y = DrawDrone(m, w, y);
         CustomMinimumSize = new Vector2(0, y + 4);
+    }
+
+    /// <summary>Indicadores de la RNA: métricas de prueba y estado del mapa de creencias.</summary>
+    private float DrawRnaKpi(Mission m, float w, float y)
+    {
+        Gfx.Header(this, new Vector2(0, y), w, "RNA · INDICADORES", UiTheme.Rna);
+        y += 18;
+        var b = m.Belief;
+        int obs = b.Observed.Count(o => o), cl = b.ConfirmedCliff.Count(o => o), ob = b.ConfirmedObstacle.Count(o => o), vt = b.Vetoed.Count(o => o);
+        var rep = m.Rna?.Report.Test;
+        (string, string, Color)[] rows =
+        {
+            ("Exactitud en prueba", rep != null ? $"{rep.Accuracy:P1} (base {rep.Baseline:P1})" : "—", UiTheme.Text),
+            ("Macro-F1 · recall barranco", rep != null ? $"{rep.MacroF1:0.000} · {rep.Recall[2]:P1}" : "—", UiTheme.Text),
+            ("Celdas observadas", $"{obs} ({obs * 100f / b.Observed.Length:0.0} %)", UiTheme.Text),
+            ("Barrancos / obstáculos confirm.", $"{cl} / {ob}", cl + ob > 0 ? UiTheme.Warn : UiTheme.Text),
+            ("Celdas vetadas", vt.ToString(), vt > 0 ? new Color("d080ff") : UiTheme.Text),
+            ("Rasgos (z) fuera de ±3", m.Rna != null ? m.FrontFeatures.Select((v, i) => MathF.Abs((v - m.Rna.Mean[i]) / m.Rna.Std[i])).Count(z => z > 3).ToString() : "—", UiTheme.Text),
+        };
+        foreach (var (n, v, c) in rows)
+        {
+            Gfx.Text(this, new Vector2(4, y), n, 10, UiTheme.Dim);
+            Gfx.Text(this, new Vector2(0, y), v, 10, c, w - 4, HorizontalAlignment.Right);
+            y += 12;
+        }
+        return y;
+    }
+
+    /// <summary>Todas las reglas difusas con su fuerza de activación en este paso.</summary>
+    private float DrawRules(Mission m, float w, float y)
+    {
+        var fz = m.LastFuzzy;
+        Gfx.Header(this, new Vector2(0, y), w, "REGLAS ACTIVAS (fuerza)", UiTheme.Fuzzy);
+        y += 18;
+        if (fz == null) return y + 12;
+        foreach (var (rule, st) in fz.Fired.OrderByDescending(f => f.Strength).Take(8))
+        {
+            Gfx.Bar(this, new Rect2(4, y + 3, 40, 7), st, UiTheme.Fuzzy);
+            Gfx.Text(this, new Vector2(48, y), $"{rule.Id} {Short(rule)}", 9, st > 0.01f ? UiTheme.Text : UiTheme.Dim, w - 52);
+            y += 12;
+        }
+        return y;
+    }
+
+    /// <summary>Evolución del fitness de la última corrida del AG (mejor y media por generación).</summary>
+    private float DrawGaHistory(Mission m, float w, float y)
+    {
+        var ga = m.LastGa;
+        Gfx.Header(this, new Vector2(0, y), w, "AG · FITNESS POR GENERACIÓN", UiTheme.Ga);
+        y += 18;
+        if (ga == null || ga.History.Count < 2) return y + 12;
+        Gfx.Text(this, new Vector2(4, y), $"mejor {ga.History[^1].Best:0.000} · media {ga.History[^1].Mean:0.000} · factibles {ga.History[^1].FeasibleCount}/{ga.Params.Population}", 10, UiTheme.Text, w - 8);
+        y += 14;
+        var r = new Rect2(4, y, w - 8, 56);
+        Gfx.Frame(this, r);
+        float lo = ga.History.Min(h => h.Mean), hi = ga.History.Max(h => h.Best);
+        if (hi - lo < 1e-4f) hi = lo + 1e-4f;
+        Vector2 P(int i, float v) => new(r.Position.X + r.Size.X * i / (ga.History.Count - 1), r.End.Y - r.Size.Y * (v - lo) / (hi - lo));
+        DrawPolyline(ga.History.Select((h, i) => P(i, h.Mean)).ToArray(), new Color(UiTheme.Ga, 0.6f), 1.2f, true);
+        DrawPolyline(ga.History.Select((h, i) => P(i, h.Best)).ToArray(), UiTheme.Ok, 1.6f, true);
+        Gfx.Text(this, new Vector2(4, y + 58), "verde = mejor · violeta = media", 9, UiTheme.Dim, w - 8);
+        return y + 72;
     }
 
     private float DrawDestination(Mission m, float w, float y)

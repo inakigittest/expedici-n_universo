@@ -54,7 +54,6 @@ public sealed partial class Mission
     public bool HeliLanded = true;
     public float HeliRho = 1.2f, HeliPowerW, HeliMargin = 1.5f, HeliClimbDeg;
     public string HeliLzNote = "";
-    private float _heliExtraJ;
 
     /// <summary>Parámetros del vehículo (antes de fijar la batería inicial).</summary>
     private void InitHeliParams()

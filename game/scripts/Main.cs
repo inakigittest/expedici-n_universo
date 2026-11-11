@@ -437,6 +437,7 @@ public partial class Main : Node3D, IGameHost
     /// <summary>Muestra/oculta una ventana (HUD o laboratorio). En móvil las del HUD son cajones.</summary>
     public void ToggleWindow(string id)
     {
+        if (id == "strip") { _hud.ToggleStrip(); return; }
         if (id.StartsWith("lab_")) _labs.Toggle(id);
         else if (Platform.IsMobile) _hud.ToggleDrawerFor(id);
         else WindowManager.Toggle(id);

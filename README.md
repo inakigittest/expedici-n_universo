@@ -129,12 +129,24 @@ se decodifican y se remuestrean a una grilla cuadrada de celdas de 30 m (la reso
 
 ## Interfaz
 
-- Los controles están fijos en una columna a la derecha (simulación, eventos, dron y ventanas).
-- Telemetría, decisión, bitácora, mapa y los cinco laboratorios son **ventanas flotantes**: se arrastran, se minimizan
-  (doble clic en el título) y se redimensionan. Hay disposiciones predefinidas (Limpia, Análisis, Paneles) y un control
-  de opacidad. La disposición se guarda entre sesiones.
-- Los laboratorios de RNA, difuso y genético funcionan **en vivo sin pausar la misión**; el genético puede reproducir
-  la evolución generación por generación.
+- **Acoples izquierdo y derecho:** las ventanas (telemetría, decisión, bitácora, mapa, control y laboratorios) se
+  apilan a los lados sin taparse y se reparten el alto. Al minimizar o cerrar una, las demás crecen.
+  - Para acoplar o soltar, arrastra el título hasta un borde. El botón ◧/◨/▣ cambia el acople.
+  - La esquina inferior ajusta el ancho del acople y la altura relativa de la ventana.
+  - Lejos de los bordes, una ventana queda flotante.
+- **Centro libre para el vehículo**, con la **franja de decisión en vivo** debajo: VEHÍCULO → RNA (ver) → DIFUSO
+  (ajustar) → AG (elegir) → SUPERVISOR (decidir), siempre del paso actual.
+- **CONTROL** es un panel colapsable (solo se minimiza, no se cierra).
+- **Laboratorios en vivo sin pausar la misión.** Si la ventana es angosta (por ejemplo, acoplada), muestran un
+  **resumen de indicadores**: probabilidades, métricas de prueba y estado de las creencias (RNA); entradas, reglas
+  activas y salidas (difuso); candidatas, desglose del fitness y curva por generación (genético). El botón
+  Auto/Resumen/Completa fuerza la vista.
+- **Disposiciones:**
+  - Conducción (por defecto): decisión a la izquierda, control y mapa a la derecha.
+  - Análisis: los tres laboratorios en resumen.
+  - Paneles: telemetría, bitácora, decisión y mapa.
+  - Limpia: solo el mundo y la franja.
+- La disposición se guarda entre sesiones. La opacidad de las ventanas se ajusta entre 55 y 100 %.
 
 ## Controles
 

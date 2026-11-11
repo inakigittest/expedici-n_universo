@@ -129,8 +129,9 @@ public partial class Hud : CanvasLayer
         _log = new RichTextLabel { BbcodeEnabled = true, ScrollFollowing = true, SizeFlagsVertical = Control.SizeFlags.ExpandFill, SelectionEnabled = true };
         logBox.AddChild(_log);
 
-        // Panel E · control: columna vertical fija a la derecha (en móvil, cajón "Control")
-        _pCtl = MakePanel(1, 0, 1, 1, -184, 32, -6, -6, "CONTROL", out var ctlBox);
+        // Panel E · control: ventana acoplable y colapsable (en móvil, cajón "Control")
+        _pCtl = MakeWindow("ctl", "CONTROL", new Rect2(1090, 32, 300, 560), out var ctlBox);
+        ((FloatPanel)_pCtl).Closable = false;
         var ctlScroll = new ScrollContainer { SizeFlagsVertical = Control.SizeFlags.ExpandFill, HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled };
         var ctl = new VBoxContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
         ctl.AddThemeConstantOverride("separation", 3);
@@ -144,9 +145,9 @@ public partial class Hud : CanvasLayer
         hb.AddThemeConstantOverride("separation", 6);
         hb.SizeFlagsVertical = Control.SizeFlags.ExpandFill;
         hb.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
-        Map = new MiniMap { CustomMinimumSize = new Vector2(150, 150), SizeFlagsHorizontal = Control.SizeFlags.ExpandFill, SizeFlagsVertical = Control.SizeFlags.ExpandFill, MouseFilter = Control.MouseFilterEnum.Stop, TooltipText = "Clic: inspeccionar celda · Mayús+clic: barranco · Ctrl+clic: roca · Alt+clic: despejar" };
+        Map = new MiniMap { CustomMinimumSize = new Vector2(90, 90), SizeFlagsHorizontal = Control.SizeFlags.ExpandFill, SizeFlagsVertical = Control.SizeFlags.ExpandFill, MouseFilter = Control.MouseFilterEnum.Stop, TooltipText = "Clic: inspeccionar celda · Mayús+clic: barranco · Ctrl+clic: roca · Alt+clic: despejar" };
         Map.Edit = (c, w) => Host.MapEdit(c, w);
-        Sparks = new Sparklines { CustomMinimumSize = new Vector2(118, 150), SizeFlagsHorizontal = Control.SizeFlags.ExpandFill, SizeFlagsStretchRatio = 0.6f };
+        Sparks = new Sparklines { CustomMinimumSize = new Vector2(100, 90), SizeFlagsHorizontal = Control.SizeFlags.ExpandFill, SizeFlagsStretchRatio = 0.6f };
         hb.AddChild(Map);
         hb.AddChild(Sparks);
         mapBox.AddChild(hb);
@@ -176,6 +177,14 @@ public partial class Hud : CanvasLayer
         _root.AddChild(_objective);
         Anchor(_objective, 0.5f, 1, 0.5f, 1, -390, -250, 210, -214);
 
+        // franja de decisión en vivo (centro abajo, entre los acoples): lo que el sistema evalúa en este paso
+        Strip = new LiveStrip { MouseFilter = Control.MouseFilterEnum.Stop, Visible = !Platform.IsMobile };
+        _root.AddChild(Strip);
+        Anchor(Strip, 0.5f, 1, 0.5f, 1, -300, -112, 300, -6);
+        _uiHit.Add(Strip);
+        WindowManager.HintLayer = _root;
+        WindowManager.CenterChanged += OnCenterChanged;
+
         // fin de misión
         _end = new PanelContainer { Visible = false };
         _root.AddChild(_end);
@@ -195,6 +204,32 @@ public partial class Hud : CanvasLayer
 
     // ================================================================== interfaz táctil (Android)
     private PanelContainer _pTele = null!, _pDec = null!, _pLog = null!, _pCtl = null!, _pMap = null!;
+    public LiveStrip Strip = null!;
+    private Button? _stripBtn;
+    public const float StripH = 104;
+
+    /// <summary>Recoloca lo que va en el centro (aviso, clima, objetivo y franja de decisión) entre los acoples.</summary>
+    private void OnCenterChanged(Rect2 c)
+    {
+        if (Platform.IsMobile) return;
+        float x0 = c.Position.X + 8, x1 = c.End.X - 8;
+        Anchor(_bannerBox, 0, 0, 0, 0, x0, c.Position.Y + 4, x1, c.Position.Y + 32);
+        Anchor(_envStrip, 0, 0, 0, 0, x0, c.Position.Y + 36, x1, c.Position.Y + 70);
+        float bottom = c.End.Y - 6;
+        if (Strip.Visible)
+        {
+            Anchor(Strip, 0, 0, 0, 0, c.Position.X + 4, bottom - StripH, c.End.X - 4, bottom);
+            bottom -= StripH + 4;
+        }
+        Anchor(_objective, 0, 0, 0, 0, x0, bottom - 38, x1, bottom);
+    }
+
+    public void ToggleStrip()
+    {
+        Strip.Visible = !Strip.Visible;
+        if (_stripBtn != null) _stripBtn.AddThemeColorOverride("font_color", Strip.Visible ? UiTheme.Accent : UiTheme.Dim);
+        OnCenterChanged(WindowManager.Center);
+    }
     private PanelContainer[] _drawers = System.Array.Empty<PanelContainer>();
     private readonly List<Control> _uiHit = new();
     private int _openDrawer = -1;
@@ -389,7 +424,7 @@ public partial class Hud : CanvasLayer
         if (_layoutDone || Platform.IsMobile) return;
         _layoutDone = true;
         WindowManager.Load(_root.Size);
-        _root.Resized += WindowManager.ClampAll;
+        _root.Resized += () => WindowManager.OnResized(_root.Size);
         RefreshWindowButtons();
     }
 
@@ -489,13 +524,18 @@ public partial class Hud : CanvasLayer
         };
         foreach (var (id, n, tip) in wins)
             _winBtns[id] = B(gw, n, () => Host.ToggleWindow(id), tip);
-        var gp = Grid(3);
-        B(gp, "Limpia", () => { WindowManager.ApplyPreset("limpia", _root.Size); RefreshWindowButtons(); }, "Solo el mundo: ver al robot y el ambiente");
-        B(gp, "Análisis", () => { WindowManager.ApplyPreset("analisis", _root.Size); RefreshWindowButtons(); }, "Laboratorios en vivo + decisión");
-        B(gp, "Paneles", () => { WindowManager.ApplyPreset("completa", _root.Size); RefreshWindowButtons(); }, "Paneles de misión (disposición original)");
+        _stripBtn = B(v, "Franja de decisión en vivo", () => ToggleStrip(), "RNA → difuso → AG → supervisor del paso actual, bajo el vehículo");
+        _stripBtn.AddThemeColorOverride("font_color", UiTheme.Accent);
+        Header("DISPOSICIÓN");
+        var gp = Grid(2);
+        B(gp, "Conducción", () => { WindowManager.ApplyPreset("conduccion", _root.Size); RefreshWindowButtons(); }, "Vehículo al centro: decisión a la izquierda, control y mapa a la derecha");
+        B(gp, "Análisis", () => { WindowManager.ApplyPreset("analisis", _root.Size); RefreshWindowButtons(); }, "Laboratorios RNA, difuso y genético en vivo (resumen de indicadores al estar acoplados)");
+        B(gp, "Paneles", () => { WindowManager.ApplyPreset("completa", _root.Size); RefreshWindowButtons(); }, "Telemetría, bitácora, decisión y mapa");
+        B(gp, "Limpia", () => { WindowManager.ApplyPreset("limpia", _root.Size); RefreshWindowButtons(); }, "Solo el mundo y la franja de decisión");
+        v.AddChild(UiTheme.Label("Arrastre un título a un borde para acoplar · ◧◨▣ cambia el acople", 9, UiTheme.Dim));
         var op = new HBoxContainer();
         op.AddChild(UiTheme.Label("Opacidad", 10, UiTheme.Dim));
-        _opacity = new HSlider { MinValue = 0.25, MaxValue = 1, Step = 0.05, Value = 1, SizeFlagsHorizontal = Control.SizeFlags.ExpandFill, CustomMinimumSize = new Vector2(70, 16), TooltipText = "Transparencia del fondo de las ventanas" };
+        _opacity = new HSlider { MinValue = 0.55, MaxValue = 1, Step = 0.05, Value = 1, SizeFlagsHorizontal = Control.SizeFlags.ExpandFill, CustomMinimumSize = new Vector2(70, 16), TooltipText = "Transparencia del fondo de las ventanas (mínimo 55 % para que el texto siga legible)" };
         _opacity.ValueChanged += val => { foreach (var w in WindowManager.All) w.SelfModulate = new Color(1, 1, 1, (float)val); };
         op.AddChild(_opacity);
         v.AddChild(op);
@@ -515,6 +555,7 @@ public partial class Hud : CanvasLayer
         _top.Host = Host;
         Telemetry.Mission = m;
         Decision.Mission = m;
+        Strip.Mission = m;
         Map.Mission = m;
         Sparks.Mission = m;
         Sparks.Clear();

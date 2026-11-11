@@ -299,9 +299,51 @@ public partial class Labs : CanvasLayer
         w.Content.AddChild(scroll);
         w.Shown += () => RefreshWindow(id, true);
         _wins[id] = w;
+        // resumen de indicadores en vivo: se muestra cuando la ventana es angosta (p. ej. acoplada) en vez de desbordarse
+        string? sections = id switch { "lab_rna" => "rna,rnakpi", "lab_fuzzy" => "fuzzy,sup", "lab_ga" => "ga,gahist", _ => null };
+        if (sections != null && !Platform.IsMobile)
+        {
+            var compact = new DecisionPanel { Sections = sections, SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+            var cscroll = new ScrollContainer { SizeFlagsVertical = Control.SizeFlags.ExpandFill, HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled, Visible = false };
+            cscroll.AddChild(compact);
+            w.Content.AddChild(cscroll);
+            var mode = UiTheme.Button("Auto", () => { }, "Vista: Auto (resumen si la ventana es angosta) → Resumen → Completa");
+            mode.CustomMinimumSize = new Vector2(70, 0);
+            mode.Pressed += () =>
+            {
+                _viewMode[id] = (_viewMode.GetValueOrDefault(id) + 1) % 3;
+                mode.Text = new[] { "Auto", "Resumen", "Completa" }[_viewMode[id]];
+            };
+            if (w.Content.GetChild(0) is HBoxContainer bar) bar.AddChild(mode);
+            _compact[id] = (compact, cscroll, scroll);
+        }
     }
 
-    private bool Live(string id) => _wins.TryGetValue(id, out var w) && w.Visible && !w.Minimized && (!_liveChecks.TryGetValue(id, out var c) || c.ButtonPressed);
+    private readonly Dictionary<string, (DecisionPanel Panel, ScrollContainer Compact, ScrollContainer Full)> _compact = new();
+    private readonly Dictionary<string, int> _viewMode = new();
+
+    /// <summary>Resumen o vista completa según el tamaño de la ventana (y la preferencia del usuario).</summary>
+    private void UpdateCompactViews()
+    {
+        foreach (var (id, (panel, compact, full)) in _compact)
+        {
+            var w = _wins[id];
+            if (!w.Visible) continue;
+            panel.Mission = Mission;
+            int mode = _viewMode.GetValueOrDefault(id);
+            bool small = w.Size.X < 600 || w.Size.Y < 330;
+            bool useCompact = mode == 1 || (mode == 0 && small);
+            if (compact.Visible != useCompact)
+            {
+                compact.Visible = useCompact;
+                full.Visible = !useCompact;
+                if (!useCompact) RefreshWindow(id, true);
+            }
+        }
+    }
+
+    private bool Live(string id) => _wins.TryGetValue(id, out var w) && w.Visible && !w.Minimized && (!_liveChecks.TryGetValue(id, out var c) || c.ButtonPressed)
+        && !(_compact.TryGetValue(id, out var cv) && cv.Compact.Visible);   // en modo resumen no se recalcula la vista completa
 
     private void SetLive(string id, bool on)
     {
@@ -807,6 +849,7 @@ Referencias: NASA Planetary Fact Sheet, NASA Science (Solar System Temperatures,
 
     public override void _Process(double delta)
     {
+        UpdateCompactViews();
         _sinceRefresh += delta;
         if (_dirty && _sinceRefresh >= 0.25 && Mission != null)
         {
