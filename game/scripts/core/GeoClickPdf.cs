@@ -21,11 +21,12 @@ public sealed class GeoImportResult
     public string Id = "", Error = "", JsonPath = "";
     public float AreaReportKm2, AreaRebuiltKm2, WidthM, HeightM, SlopeMedianCalc, SlopeMedianReport;
     public int N;
+    public float CellM = 30;
     public bool HasCoords, HasTemps, SyntheticSatellite;
     public readonly List<string> Layers = new(), Notes = new();
 
     public string Summary => !Ok ? $"No se pudo importar: {Error}" :
-        $"Informe {Id}: {N}×{N} celdas de 30 m ({WidthM / 1000:0.0} × {HeightM / 1000:0.0} km) · área reconstruida {AreaRebuiltKm2:0.0} km² " +
+        $"Informe {Id}: {N}×{N} celdas de {CellM:0} m ({WidthM / 1000:0.0} × {HeightM / 1000:0.0} km) · área reconstruida {AreaRebuiltKm2:0.0} km² " +
         $"de {AreaReportKm2:0.0} km² del informe ({(AreaRebuiltKm2 / MathF.Max(0.01f, AreaReportKm2) - 1) * 100:+0.0;-0.0} %) · pendiente mediana " +
         $"{SlopeMedianCalc:0.0}° (informe {SlopeMedianReport:0.0}°) · capas: {string.Join(", ", Layers)}" +
         (HasCoords ? "" : " · sin coordenadas: escala por barra gráfica") + (HasTemps ? "" : " · temperatura mensual estimada") +
@@ -42,6 +43,7 @@ public sealed class GeoImportResult
 public static class GeoClickPdf
 {
     public const string UserDir = "user://escenarios/";
+    public const int MaxCells = 360;
     private static readonly CultureInfo Ci = CultureInfo.InvariantCulture;
 
     private static readonly (string Name, int R, int G, int B, string Soil)[] Esa =
@@ -168,7 +170,7 @@ public static class GeoClickPdf
             if (!m.Success) continue;
             var hem = words.FirstOrDefault(o => Math.Abs(o.BoundingBox.Bottom - w.BoundingBox.Bottom) < 2 && o.BoundingBox.Left > w.BoundingBox.Right - 0.5 && o.BoundingBox.Left - w.BoundingBox.Right < 8);
             if (hem == null || hem.Text is not ("O" or "E")) continue;
-            if (w.BoundingBox.Top > r.Bottom + 2 || w.BoundingBox.Top < r.Bottom - 18 || w.BoundingBox.Left < r.Left - 30 || w.BoundingBox.Left > r.Right + 10) continue;
+            if (w.BoundingBox.Bottom > r.Bottom + 8 || w.BoundingBox.Top < r.Bottom - 18 || w.BoundingBox.Left < r.Left - 30 || w.BoundingBox.Left > r.Right + 10) continue;
             double v = Num(m.Groups[1].Value) * (hem.Text == "O" ? -1 : 1);
             lons.Add(((w.BoundingBox.Left + hem.BoundingBox.Right) / 2, v));
         }
@@ -398,8 +400,13 @@ public static class GeoClickPdf
         if (r1 <= r0 || c1 <= c0) throw new InvalidDataException("figura de elevación vacía");
         double wm = size.Value.W, hm = size.Value.H;
         double dwm = wm * (c1 - c0) / w0, dhm = hm * (r1 - r0) / h0;
+        // a escala real: celdas de 30 m (resolución del DEM); si el área es grande o alargada, la celda crece en pasos de
+        // 10 m para no superar 360 celdas de lado (rendimiento), sin perder la escala
+        if (Math.Max(dwm, dhm) / cell > MaxCells) cell = (float)(Math.Ceiling(Math.Max(dwm, dhm) / MaxCells / 10.0) * 10.0);
         int nGrid = (int)Math.Ceiling(Math.Max(dwm, dhm) / cell);
-        if (nGrid > 420) throw new InvalidDataException($"área demasiado grande para celdas de {cell} m ({nGrid}×{nGrid})");
+        if (cell > 120) throw new InvalidDataException($"área demasiado grande ({Math.Max(dwm, dhm) / 1000:0.0} km de lado): necesitaría celdas de {cell:0} m");
+        res.CellM = cell;
+        if (cell > 30) res.Notes.Add($"área de {Math.Max(dwm, dhm) / 1000:0.0} km de lado: celdas de {cell:0} m para mantener el rendimiento");
         double side = nGrid * cell;
         double cu = (c0 + c1) / 2.0 / w0, cv = (r0 + r1) / 2.0 / h0;
         var uu = new double[nGrid];

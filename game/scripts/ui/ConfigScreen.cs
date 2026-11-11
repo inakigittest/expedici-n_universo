@@ -179,6 +179,12 @@ public partial class ConfigScreen : CanvasLayer
         if (pdf != null) StartImport(pdf);
     }
 
+    public void SelectHeliForTest()
+    {
+        _mode.Selected = 2;
+        Refresh();
+    }
+
     /// <summary>Captura automática: importa como si el usuario hubiera elegido el archivo.</summary>
     public void ImportForTest(string path) => StartImport(path);
 
@@ -301,7 +307,20 @@ public partial class ConfigScreen : CanvasLayer
         _terrainRow.Visible = _terrainLabel.Visible = earthRover;
         var geo = Geo;
         var sc = earthRover ? SelectedScenario : null;
-        string earth = p.Style != TerrainStyle.Tierra ? "" :
+        string heliWarn = "";
+        if (p.Style == TerrainStyle.Tierra && _mode.Selected == 2)
+        {
+            // margen de potencia del helicóptero en la zona más baja y en la mediana del área (densidad por altura y temperatura)
+            float tMonth = geo.MonthlyTempC[cfg.Month - 1];
+            float Margin(float elev) => HeliModel.Margin(HeliModel.Density(1.01325f * MathF.Exp(-elev / 1000f / p.ScaleHeightKm), tMonth - 0.0065f * (elev - geo.ElevMedian) + 6f));
+            float mLow = Margin(geo.ElevMin), mMed = Margin(geo.ElevMedian);
+            heliWarn = mLow < 1f
+                ? $"\n[color=#ff6a5a]⚠ Helicóptero: a {geo.ElevMin:0}–{geo.ElevMedian:0} m el aire es muy poco denso (margen de potencia {mLow:0.00}–{mMed:0.00} < 1): no podrá sostener el vuelo y el supervisor lo mantendrá en tierra (H-01). Use el rover.[/color]\n"
+                : mMed < 1.12f
+                    ? $"\n[color=#ffb347]⚠ Helicóptero: margen de potencia estrecho a esta altura ({mLow:0.00} abajo, {mMed:0.00} en la mediana): volará más lento y con alertas H-01.[/color]\n"
+                    : $"\n[color=#8a96aa]Helicóptero: margen de potencia {mLow:0.00} (zona baja) · {mMed:0.00} (mediana).[/color]\n";
+        }
+        string earth = p.Style != TerrainStyle.Tierra ? "" : heliWarn +
             (sc != null
                 ? $"\n[color=#5ab0ff]ESCENARIO A ESCALA REAL · {geo.Consulta}[/color]\n" +
                   $"{sc.N}×{sc.N} celdas de {sc.CellM:0} m · {sc.WidthM / 1000:0.0} × {sc.HeightM / 1000:0.0} km · periodo {geo.Period}\n" +

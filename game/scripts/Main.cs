@@ -215,7 +215,7 @@ public partial class Main : Node3D, IGameHost
             if (_args.Contains("--autostart")) AutoStart();
             else if (_shotPath != null) _shotWait = 30;
             foreach (var a in _args)
-                if (a.StartsWith("--config-scenario=")) _config.SelectScenario(a[18..]);
+                if (a.StartsWith("--config-scenario=")) { _config.SelectScenario(a[18..]); if (_args.Contains("--heli")) _config.SelectHeliForTest(); }
             foreach (var a in _args)
                 if (a.StartsWith("--config-import=")) { _config.ImportForTest(a[16..]); _shotWait = 900; }
         }
