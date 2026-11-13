@@ -222,6 +222,8 @@ public partial class Main : Node3D, IGameHost
         if (_mission == null || _robot == null) { HandleShot(); return; }
         if (_overlay != null) _overlay.RobotPos = _robot.GlobalPosition;
         _robot.HeliAglM = _mission.HeliAglM;
+        _hud.Card.WorldPos = _robot.GlobalPosition;
+        _hud.Card.LiftUnits = _mission.Heli && _mission.HeliAglM > 0.5f ? Mathf.Clamp(_mission.HeliAglM * Grid.V, 3.5f, 9f) + 2.5f : 3.2f;
         if (_config.IsShown) { HandleShot(); return; }
 
         if (!OS.HasFeature("mobile")) UpdateHover();
@@ -440,6 +442,7 @@ public partial class Main : Node3D, IGameHost
     public void ToggleWindow(string id)
     {
         if (id == "strip") { _hud.ToggleStrip(); return; }
+        if (id == "card") { _hud.ToggleCard(); return; }
         if (id.StartsWith("lab_")) _labs.Toggle(id);
         else if (Platform.IsMobile) _hud.ToggleDrawerFor(id);
         else WindowManager.Toggle(id);
@@ -561,8 +564,9 @@ public partial class Main : Node3D, IGameHost
         }
         if (e is InputEventMouseButton { Pressed: true } mb && _mission != null && !_config.IsShown)
         {
-            if (mb.ButtonIndex == MouseButton.WheelUp) _cam.Wheel(-1);
-            if (mb.ButtonIndex == MouseButton.WheelDown) _cam.Wheel(1);
+            float wf = mb.Factor > 0 ? mb.Factor : 1f;   // trackpads: pasos fraccionarios
+            if (mb.ButtonIndex == MouseButton.WheelUp) _cam.Wheel(-1, wf);
+            if (mb.ButtonIndex == MouseButton.WheelDown) _cam.Wheel(1, wf);
             if (mb.ButtonIndex == MouseButton.Right) { _mission.CancelDestination(); GetViewport().SetInputAsHandled(); }
             if (mb.ButtonIndex == MouseButton.Left && PickCell(mb.Position) is Cell c)
             {

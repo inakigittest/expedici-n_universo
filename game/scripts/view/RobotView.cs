@@ -218,18 +218,28 @@ public partial class RobotView : Node3D
 }
 
 /// <summary>
-/// Cámara ortográfica 3/4 que sigue al robot. El pitch y la escala salen del set de sprites (skeleton.json) para que
-/// el mecha se vea nítido. Q/E giran 45°, la rueda cambia el zoom.
+/// Cámara ortográfica 3/4 (la del proyecto de mechas, adaptada): el pitch y la escala salen del set de sprites. Todo es
+/// continuo y suavizado:
+///   * giro: Q/E mantenidos (acelera y frena con inercia), arrastrar con el botón central, o los botones ⟲⟳ (45°);
+///     los sprites eligen su dirección respecto a la cámara en cada frame;
+///   * zoom: la rueda multiplica el zoom objetivo (×1,15 por paso) y el encuadre se acerca a él con suavidad;
+///   * seguimiento: muelle críticamente amortiguado (sin tirones);
+///   * sacudida: trauma (0..1) que crece con el cuadrado y se apaga solo.
+/// Usa el tiempo real. En mapas a escala real la cámara se aleja y el zoom llega mucho más lejos.
 /// </summary>
 public partial class CameraRig : Node3D
 {
     public Node3D? Target;
     public float Zoom = 2.5f;
-    public static readonly float[] ZoomLevels = { 1f, 1.5f, 2f, 2.5f, 3f, 4f, 5f, 6.5f };
     public Camera3D Camera { get; private set; } = null!;
-    private float _yawDeg = 0, _baseSize;
-    private float _distance = 45f;
-    public float MaxZoom = 7f;
+    public float MaxZoom = 7f, MinZoom = 0.8f;
+    public float FollowTime = 0.16f, LookHeight = 1.2f, YawSpeed = 110f;
+    private const float ZoomStep = 1.15f, DragDegPerPx = 0.35f;
+    private float _yawDeg, _yawVel, _zoomTarget = 2.5f, _trauma, _shakeT, _baseSize, _distance = 45f;
+    private float? _snapTo;
+    private Vector3 _vel;
+    private ulong _lastUsec;
+    private readonly FastNoiseLite _noise = new() { NoiseType = FastNoiseLite.NoiseTypeEnum.Simplex, Frequency = 1f };
 
     /// <summary>Mapas a escala real (km): cámara más lejos (el relieve puede superar los 100 m de altura de mundo) y más zoom.</summary>
     public void ConfigureForLarge(bool large)
@@ -240,10 +250,8 @@ public partial class CameraRig : Node3D
         Camera.Position = new Vector3(0, Mathf.Sin(p), Mathf.Cos(p)) * _distance;
         Camera.Far = large ? 2400f : 300f;
         EnvironmentFx.FogScale = 45f / _distance;
-        Zoom = Mathf.Min(Zoom, MaxZoom);
+        Zoom = _zoomTarget = Mathf.Min(Zoom, MaxZoom);
     }
-
-    private float[] Levels => MaxZoom > 10 ? new[] { 1f, 1.5f, 2f, 3f, 4f, 6f, 9f, 13f, 20f, 30f, 48f } : ZoomLevels;
 
     public override void _Ready()
     {
@@ -251,6 +259,7 @@ public partial class CameraRig : Node3D
         float p = Mathf.DegToRad(skel.Pitch);
         int vh = ProjectSettings.GetSetting("display/window/size/viewport_height").AsInt32();
         _baseSize = vh * skel.PixelSize;
+        _zoomTarget = Zoom;
         Camera = new Camera3D
         {
             Projection = Camera3D.ProjectionType.Orthogonal, Size = _baseSize * Zoom, Near = 0.5f, Far = 300f,
@@ -258,59 +267,102 @@ public partial class CameraRig : Node3D
         };
         AddChild(Camera);
         Camera.MakeCurrent();
+        _lastUsec = Time.GetTicksUsec();
     }
 
     public override void _Process(double delta)
     {
-        if (Input.IsActionJustPressed("cam_left")) Rotate45(-1);
-        if (Input.IsActionJustPressed("cam_right")) Rotate45(1);
-        if (Target == null) return;
-        Vector3 goal = Target.GlobalPosition + Vector3.Up * 1.2f;
-        float t = 1f - Mathf.Exp(-6f * (float)delta);
-        GlobalPosition = GlobalPosition.Lerp(goal, t);
+        ulong now = Time.GetTicksUsec();
+        float dt = Mathf.Min((now - _lastUsec) / 1e6f, 0.1f);
+        _lastUsec = now;
+        if (dt <= 0) return;
+        UpdateYaw(dt);
+        Zoom = Mathf.Lerp(Zoom, _zoomTarget, 1f - Mathf.Exp(-12f * dt));
+        Camera.Size = _baseSize * Zoom;
+        if (Target != null)
+            GlobalPosition = SmoothDamp(GlobalPosition, Target.GlobalPosition + Vector3.Up * LookHeight, ref _vel, FollowTime, dt);
+        UpdateShake(dt);
     }
 
-    public void Wheel(int step)
+    // ------------------------------------------------------------------ giro
+    private void UpdateYaw(float dt)
     {
-        var lv = Levels;
-        int i = Array.FindIndex(lv, z => z >= Zoom - 0.01f);
-        i = Mathf.Clamp((i < 0 ? lv.Length - 1 : i) + step, 0, lv.Length - 1);
-        Zoom = lv[i];
-        CreateTween().TweenProperty(Camera, "size", _baseSize * Zoom, 0.18).SetTrans(Tween.TransitionType.Cubic).SetEase(Tween.EaseType.Out);
+        float input = (Input.IsActionPressed("cam_right") ? 1f : 0f) - (Input.IsActionPressed("cam_left") ? 1f : 0f);
+        if (input != 0)
+        {
+            _snapTo = null;
+            _yawVel = Mathf.MoveToward(_yawVel, input * YawSpeed, YawSpeed * 5f * dt);
+        }
+        else if (_snapTo is { } goal)
+        {
+            float diff = goal - _yawDeg;
+            _yawVel = Mathf.Lerp(_yawVel, diff * 9f, 1f - Mathf.Exp(-14f * dt));
+            if (Mathf.Abs(diff) < 0.05f && Mathf.Abs(_yawVel) < 1f)
+            {
+                _yawDeg = goal;
+                _yawVel = 0;
+                _snapTo = null;
+            }
+        }
+        else _yawVel = Mathf.MoveToward(_yawVel, 0, YawSpeed * 6f * dt);
+        _yawDeg += _yawVel * dt;
+        RotationDegrees = new Vector3(0, _yawDeg, 0);
     }
+
+    public override void _UnhandledInput(InputEvent e)
+    {
+        if (e is InputEventMouseMotion mm && (mm.ButtonMask & MouseButtonMask.Middle) != 0)
+        {
+            _snapTo = null;
+            _yawVel = 0;
+            _yawDeg -= mm.Relative.X * DragDegPerPx;
+            GetViewport().SetInputAsHandled();
+        }
+    }
+
+    /// <summary>Botones ⟲⟳: termina el giro en el siguiente múltiplo de 45° (con muelle).</summary>
+    public void Rotate45(int sign) => _snapTo = (Mathf.Round(((_snapTo ?? _yawDeg)) / 45f) + sign) * 45f;
+
+    // ------------------------------------------------------------------ zoom
+    /// <summary>Rueda: ×1,15 por paso (se alcanza con suavidad).</summary>
+    public void Wheel(int step, float factor = 1f) =>
+        _zoomTarget = Mathf.Clamp(_zoomTarget * Mathf.Pow(ZoomStep, step * factor), MinZoom, MaxZoom);
 
     /// <summary>Zoom continuo (pellizco en pantallas táctiles).</summary>
-    public void ZoomBy(float factor)
-    {
-        Zoom = Mathf.Clamp(Zoom * factor, 0.8f, MaxZoom);
-        Camera.Size = _baseSize * Zoom;
-    }
+    public void ZoomBy(float factor) => _zoomTarget = Mathf.Clamp(_zoomTarget * factor, MinZoom, MaxZoom);
 
     public void Snap()
     {
-        if (Target != null) GlobalPosition = Target.GlobalPosition + Vector3.Up * 1.2f;
-        Camera.Size = _baseSize * Zoom;
+        _zoomTarget = Zoom;
+        if (Target != null) GlobalPosition = Target.GlobalPosition + Vector3.Up * LookHeight;
+        _vel = Vector3.Zero;
+        if (Camera != null) Camera.Size = _baseSize * Zoom;
     }
 
-    public void Rotate45(int sign)
+    // ------------------------------------------------------------------ seguimiento
+    /// <summary>Muelle críticamente amortiguado (como SmoothDamp): llega sin pasarse ni dar tirones.</summary>
+    private static Vector3 SmoothDamp(Vector3 cur, Vector3 goal, ref Vector3 vel, float time, float dt)
     {
-        _yawDeg += 45f * sign;
-        CreateTween().TweenProperty(this, "rotation_degrees:y", _yawDeg, 0.25).SetTrans(Tween.TransitionType.Cubic).SetEase(Tween.EaseType.Out);
+        float omega = 2f / Mathf.Max(time, 0.0001f);
+        float x = omega * dt;
+        float exp = 1f / (1f + x + 0.48f * x * x + 0.235f * x * x * x);
+        Vector3 change = cur - goal;
+        Vector3 temp = (vel + omega * change) * dt;
+        vel = (vel - omega * temp) * exp;
+        return goal + (change + temp) * exp;
     }
 
-    /// <summary>Sacudida breve (sismo, impacto, colisión).</summary>
-    public void Shake(float amount, float seconds)
+    // ------------------------------------------------------------------ sacudida
+    /// <summary>Sacudida (sismo, impacto, colisión): amount ≈ 0,1–0,6; la duración sale del decaimiento del trauma.</summary>
+    public void Shake(float amount, float seconds) => _trauma = Mathf.Min(1f, _trauma + Mathf.Clamp(amount * (0.6f + seconds * 0.4f), 0, 1));
+
+    private void UpdateShake(float dt)
     {
-        var tw = CreateTween();
-        int n = Mathf.Max(2, (int)(seconds / 0.04f));
-        for (int i = 0; i < n; i++)
-        {
-            float k = amount * (1f - i / (float)n);
-            tw.TweenProperty(Camera, "h_offset", (float)GD.RandRange(-k, k), 0.04);
-            tw.Parallel().TweenProperty(Camera, "v_offset", (float)GD.RandRange(-k, k), 0.04);
-        }
-        tw.TweenProperty(Camera, "h_offset", 0f, 0.05);
-        tw.Parallel().TweenProperty(Camera, "v_offset", 0f, 0.05);
+        _trauma = Mathf.Max(0, _trauma - 1.4f * dt);
+        _shakeT += dt * 22f;
+        float s = _trauma * _trauma * Camera.Size * 0.025f;
+        Camera.HOffset = s * _noise.GetNoise2D(_shakeT, 0.5f);
+        Camera.VOffset = s * _noise.GetNoise2D(0.5f, _shakeT);
     }
 }
 

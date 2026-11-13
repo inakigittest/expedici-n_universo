@@ -479,11 +479,11 @@ public static class WindowManager
                 Set("lab_fuzzy", DockSide.Left, 1, 1.2f, true);
                 Set("lab_ga", DockSide.Right, 1, 1.4f, true);
                 Set("ctl", DockSide.Right, 0, 1, true, true);
-                Set("dec", DockSide.Right, 2, 1, false);
                 break;
             case "limpia":
-                Set("ctl", DockSide.Right, 0, 1, true, true);
-                Set("map", DockSide.Right, 1, 1, true, true);
+                RightW = 300;
+                Set("ia", DockSide.Right, 0, 1, true, true);
+                Set("ctl", DockSide.Right, 1, 1, true, true);
                 break;
             case "completa":
                 Set("tele", DockSide.Left, 0, 1.6f, true);
@@ -492,10 +492,11 @@ public static class WindowManager
                 Set("dec", DockSide.Right, 1, 1.8f, true);
                 Set("map", DockSide.Right, 2, 1f, true);
                 break;
-            default:   // conduccion
-                Set("dec", DockSide.Left, 0, 1f, true);
-                Set("ctl", DockSide.Right, 0, 1.25f, true);
-                Set("map", DockSide.Right, 1, 1f, true);
+            default:   // conduccion: vehículo al centro; a la derecha la IA en vivo, el control y el mapa
+                RightW = 300;
+                Set("ia", DockSide.Right, 0, 2.1f, true);
+                Set("ctl", DockSide.Right, 1, 1.3f, true);
+                Set("map", DockSide.Right, 2, 1f, true, true);
                 break;
         }
         _loading = false;
@@ -510,7 +511,7 @@ public static class WindowManager
         var cfg = new ConfigFile();
         cfg.SetValue("_dock", "left", LeftW);
         cfg.SetValue("_dock", "right", RightW);
-        cfg.SetValue("_dock", "version", 2);
+        cfg.SetValue("_dock", "version", 3);
         foreach (var (id, p) in Panels)
         {
             cfg.SetValue(id, "rect", p.Side == DockSide.Float && !p.Minimized ? new Rect2(p.Position, p.Size) : p.FloatRect);
@@ -529,7 +530,7 @@ public static class WindowManager
         if (Platform.IsMobile) return false;
         Area = area;
         var cfg = new ConfigFile();
-        if (cfg.Load(LayoutPath) != Error.Ok || (int)cfg.GetValue("_dock", "version", 1) < 2)
+        if (cfg.Load(LayoutPath) != Error.Ok || (int)cfg.GetValue("_dock", "version", 1) < 3)
         {
             ApplyPreset("conduccion", area);
             return false;

@@ -178,11 +178,19 @@ public partial class Hud : CanvasLayer
         Anchor(_objective, 0.5f, 1, 0.5f, 1, -390, -250, 210, -214);
 
         // franja de decisión en vivo (centro abajo, entre los acoples): lo que el sistema evalúa en este paso
-        Strip = new LiveStrip { MouseFilter = Control.MouseFilterEnum.Stop, Visible = !Platform.IsMobile };
+        Strip = new LiveStrip { MouseFilter = Control.MouseFilterEnum.Stop, Visible = false };
         _root.AddChild(Strip);
         Anchor(Strip, 0.5f, 1, 0.5f, 1, -300, -112, 300, -6);
         _uiHit.Add(Strip);
         WindowManager.HintLayer = _root;
+
+        // panel vertical "IA en vivo" (figuras de los laboratorios) y ficha flotante del vehículo
+        _pIa = MakeWindow("ia", "IA EN VIVO", new Rect2(1000, 32, 250, 440), out var iaBox);
+        Ia = new IaPanel { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill, OpenWindow = id => Host.ToggleWindow(id) };
+        iaBox.AddChild(Scroll(Ia));
+        if (Platform.IsMobile) _pIa.Visible = false;
+        Card = new VehicleCard();
+        _root.AddChild(Card);
         WindowManager.CenterChanged += OnCenterChanged;
 
         // fin de misión
@@ -205,6 +213,15 @@ public partial class Hud : CanvasLayer
     // ================================================================== interfaz táctil (Android)
     private PanelContainer _pTele = null!, _pDec = null!, _pLog = null!, _pCtl = null!, _pMap = null!;
     public LiveStrip Strip = null!;
+    public IaPanel Ia = null!;
+    public VehicleCard Card = null!;
+    private FloatPanel _pIa = null!;
+
+    public void ToggleCard()
+    {
+        Card.Visible = !Card.Visible;
+        RefreshWindowButtons();
+    }
     private Button? _stripBtn;
     public const float StripH = 104;
 
@@ -212,6 +229,7 @@ public partial class Hud : CanvasLayer
     private void OnCenterChanged(Rect2 c)
     {
         if (Platform.IsMobile) return;
+        Card.Area = c;
         float x0 = c.Position.X + 8, x1 = c.End.X - 8;
         Anchor(_bannerBox, 0, 0, 0, 0, x0, c.Position.Y + 4, x1, c.Position.Y + 32);
         Anchor(_envStrip, 0, 0, 0, 0, x0, c.Position.Y + 36, x1, c.Position.Y + 70);
@@ -516,16 +534,16 @@ public partial class Hud : CanvasLayer
         var gw = Grid(2);
         (string Id, string N, string Tip)[] wins =
         {
-            ("tele", "Telemetría", "Sensores con ruido y validación"), ("dec", "Decisión", "RNA → difuso + AG → supervisor"),
+            ("ia", "IA en vivo", "RNA, difuso, AG y supervisor en un panel vertical (clic en una figura = laboratorio completo)"),
+            ("card", "Ficha", "Ficha flotante que sigue al vehículo: decisión, batería, temperatura, viento"),
+            ("tele", "Telemetría", "Sensores con ruido y validación"), ("dec", "Decisión", "Detalle: RNA → difuso + AG → supervisor"),
             ("log", "Bitácora", "Historial de decisiones"), ("map", "Mapa 2D", "Creencia / verdad"),
-            ("lab_rna", "Lab RNA", "Red neuronal en vivo (Tab)"), ("lab_fuzzy", "Lab Difuso", "Lógica difusa en vivo"),
-            ("lab_ga", "Lab Genético", "Algoritmo genético en vivo"), ("lab_policies", "Políticas", "20 semillas × ablaciones"),
-            ("lab_help", "Ayuda", "Controles, leyenda y supuestos (H)"),
+            ("lab_policies", "Políticas", "20 semillas × ablaciones"), ("lab_help", "Ayuda", "Controles, leyenda y supuestos (H)"),
         };
         foreach (var (id, n, tip) in wins)
             _winBtns[id] = B(gw, n, () => Host.ToggleWindow(id), tip);
-        _stripBtn = B(v, "Franja de decisión en vivo", () => ToggleStrip(), "RNA → difuso → AG → supervisor del paso actual, bajo el vehículo");
-        _stripBtn.AddThemeColorOverride("font_color", UiTheme.Accent);
+        _stripBtn = B(v, "Franja de decisión", () => ToggleStrip(), "RNA → difuso → AG → supervisor del paso actual, en una franja bajo el vehículo");
+        _stripBtn.AddThemeColorOverride("font_color", UiTheme.Dim);
         Header("DISPOSICIÓN");
         var gp = Grid(2);
         B(gp, "Conducción", () => { WindowManager.ApplyPreset("conduccion", _root.Size); RefreshWindowButtons(); }, "Vehículo al centro: decisión a la izquierda, control y mapa a la derecha");
@@ -545,7 +563,7 @@ public partial class Hud : CanvasLayer
     public void RefreshWindowButtons()
     {
         foreach (var (id, b) in _winBtns)
-            b.AddThemeColorOverride("font_color", WindowManager.IsOpen(id) ? UiTheme.Accent : UiTheme.Dim);
+            b.AddThemeColorOverride("font_color", (id == "card" ? Card.Visible : WindowManager.IsOpen(id)) ? UiTheme.Accent : UiTheme.Dim);
     }
 
     public void Bind(Mission m)
@@ -556,6 +574,8 @@ public partial class Hud : CanvasLayer
         Telemetry.Mission = m;
         Decision.Mission = m;
         Strip.Mission = m;
+        Ia.Mission = m;
+        Card.Mission = m;
         Map.Mission = m;
         Sparks.Mission = m;
         Sparks.Clear();
@@ -603,7 +623,11 @@ public partial class Hud : CanvasLayer
     {
         var m = Mission;
         if (m == null) return;
-        if (Platform.IsMobile) UpdateMobileStatus(m);
+        if (Platform.IsMobile)
+        {
+            UpdateMobileStatus(m);
+            Card.Area = new Rect2(0, 34, _root.Size.X - 140, _root.Size.Y - 92);   // entre la barra táctil y las pestañas
+        }
         _playBtn.Text = Host.Running ? "Ⅱ Pausa" : "▶ Ejecutar";
         _modeBtn.Text = m.Config.ClickMode ? "Modo: CLIC" : "Modo: AUTO";
         var dr = m.Drone;
