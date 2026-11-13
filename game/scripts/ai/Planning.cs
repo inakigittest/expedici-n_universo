@@ -21,7 +21,7 @@ public sealed class CostModel
         R = r;
     }
 
-    public bool InBounds(Cell c) => MapShape.InBounds(c);
+    public bool InBounds(Cell c) => Heli ? MapShape.InGrid(c) : MapShape.InBounds(c);   // el helicóptero sobrevuela fuera del polígono
 
     /// <summary>Carga térmica media esperada (W): calefacción nocturna en cuerpos fríos, refrigeración en calientes.</summary>
     public float ExpectedThermalW => MathF.Max(R.HeaterW + R.CoolerW, MapShape.Planet.TempMeanC < -20 ? 75f : MapShape.Planet.TempMeanC > 100 ? 60f : 15f);
@@ -482,7 +482,7 @@ public sealed class RouteGA
             float r = _cm.B.Risk(path[i]);
             riskSum += r;
             maxRisk = MathF.Max(maxRisk, r);
-            if (_cm.B.Forbidden(path[i])) forb++;
+            if (_cm.Heli ? _cm.B.Vetoed[_cm.B.Idx(path[i])] : _cm.B.Forbidden(path[i])) forb++;   // el helicóptero sobrevuela agua y obstáculos
             if (!_cm.MapShape.ProbeMode && _cm.B.SlopeEst[_cm.B.Idx(path[i])] > WorldMap.MaxSlopeDeg) steep++;
         }
         float sci = 0, sciTotal = 0;

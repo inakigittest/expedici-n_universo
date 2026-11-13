@@ -113,6 +113,7 @@ public partial class ConfigScreen : CanvasLayer
         _control = new OptionButton();
         _control.AddItem("Destino por clic (el operador elige, el rover evalúa y va)");
         _control.AddItem("Misión autónoma (el AG planifica sitios y regreso)");
+        _control.AddItem("Rescate en helicóptero (personas atrapadas → hospital)");
         Row("Dinámica", _control);
 
         // ---- columna de información del planeta y RNA
@@ -135,7 +136,17 @@ public partial class ConfigScreen : CanvasLayer
         outer.AddChild(_validation);
         var bottom = new HBoxContainer();
         bottom.AddThemeConstantOverride("separation", 8);
-        _fixBtn = UiTheme.Button("Cambiar a modo sonda", () => { _mode.Selected = PlanetProfile.All[_planet.Selected].SolidSurface ? 0 : 1; Refresh(); });
+        _fixBtn = UiTheme.Button("Cambiar a modo sonda", () =>
+        {
+            if (_control.Selected == 2)
+            {
+                // rescate: helicóptero en la Tierra
+                _planet.Selected = PlanetProfile.All.FindIndex(p => p.Id == "tierra");
+                _mode.Selected = 2;
+            }
+            else _mode.Selected = PlanetProfile.All[_planet.Selected].SolidSurface ? 0 : 1;
+            Refresh();
+        });
         _fixBtn.Visible = false;
         bottom.AddChild(_fixBtn);
         var spacer = new Control { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
@@ -274,7 +285,7 @@ public partial class ConfigScreen : CanvasLayer
         UseRna = _rna.ButtonPressed,
         UseFuzzy = _fuzzy.ButtonPressed,
         UseGa = _ga.ButtonPressed,
-        Mode = _control.Selected == 0 ? MissionMode.Destino : MissionMode.Autonomo,
+        Mode = _control.Selected switch { 0 => MissionMode.Destino, 1 => MissionMode.Autonomo, _ => MissionMode.Rescate },
         Scenario = PlanetProfile.All[_planet.Selected].Style == TerrainStyle.Tierra && _mode.Selected != 1 ? SelectedScenario : null,
     };
 
@@ -296,8 +307,8 @@ public partial class ConfigScreen : CanvasLayer
         var cfg = Build();
         string? err = cfg.Validate();
         _validation.Text = err ?? "";
-        _fixBtn.Visible = err != null && err.Contains("modo");
-        _fixBtn.Text = p.SolidSurface ? "Cambiar a rover de ruedas" : "Cambiar a modo sonda";
+        _fixBtn.Visible = err != null && (err.Contains("modo") || err.Contains("Helicóptero"));
+        _fixBtn.Text = err != null && err.Contains("Helicóptero") ? "Usar helicóptero en la Tierra" : p.SolidSurface ? "Cambiar a rover de ruedas" : "Cambiar a modo sonda";
         _startBtn.Disabled = err != null || !RnaReady;
         _startBtn.Text = !RnaReady ? "  Entrenando RNA…  " : "  VALIDAR E INICIAR MISIÓN  ";
         string gas = p.SolidSurface

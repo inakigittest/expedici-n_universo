@@ -118,6 +118,14 @@ public static class Icons
             case "ok":
                 L(-0.6f, 0, -0.15f, 0.5f); L(-0.15f, 0.5f, 0.65f, -0.5f);
                 break;
+            case "person":
+                Dot(0, -0.55f, 0.28f);
+                Poly(-0.45f, 0.85f, -0.35f, -0.15f, 0.35f, -0.15f, 0.45f, 0.85f);
+                break;
+            case "cross":
+                c.DrawRect(new Rect2(V(-0.22f, -0.75f), new Vector2(0.44f, 1.5f) * h), col);
+                c.DrawRect(new Rect2(V(-0.75f, -0.22f), new Vector2(1.5f, 0.44f) * h), col);
+                break;
             case "target":
                 Ring(0, 0, 0.75f); Ring(0, 0, 0.35f); Dot(0, 0, 0.1f);
                 break;

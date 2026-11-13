@@ -81,7 +81,7 @@ public static class HeadlessRunner
             var swGen = System.Diagnostics.Stopwatch.StartNew();
             var sc = scId != null ? Scenarios.Load(scId) : null;
             double loadMs = swGen.Elapsed.TotalMilliseconds;
-            var m = new Mission(new MissionConfig { Mode = MissionMode.Autonomo, PlanetId = sc != null ? "tierra" : planet, Probe = sc == null && !p.SolidSurface, Seed = seed, MaxSteps = 400, Scenario = sc, Heli = args.Contains("--heli") }, rna);
+            var m = new Mission(new MissionConfig { Mode = args.Contains("--rescate") ? MissionMode.Rescate : MissionMode.Autonomo, PlanetId = sc != null ? "tierra" : planet, Probe = sc == null && !p.SolidSurface, Seed = seed, MaxSteps = args.Contains("--rescate") ? 900 : 400, Scenario = sc, Heli = args.Contains("--heli") }, rna);
             double genMs = swGen.Elapsed.TotalMilliseconds - loadMs;
             var stepMs = new System.Collections.Generic.List<double>();
             while (!m.Finished)
@@ -293,6 +293,11 @@ public static class HeadlessRunner
         while (!hm.Finished) hm.Step();
         Check("Helicóptero: misión en escenario 40e9efb1", hm.State == MissionState.Exito && hm.Samples > 0 && !hm.Drone.Available,
             $"{Mission.StateName(hm.State)} · muestras {hm.Samples} · {hm.Metrics()["distancia_m"]} m · batería {hm.Rover.BatteryPct:0} %");
+        Check("Rescate solo en helicóptero", new MissionConfig { PlanetId = "tierra", Mode = MissionMode.Rescate }.Validate() != null);
+        var rm = new Mission(new MissionConfig { Mode = MissionMode.Rescate, PlanetId = "tierra", Seed = 7, MaxSteps = 900, Heli = true, Scenario = Scenarios.Load("40e9efb1") }, rna);
+        while (!rm.Finished) rm.Step();
+        Check("Rescate en helicóptero (40e9efb1): AG de rescate, urgencia difusa y hospital", rm.State == MissionState.Exito && rm.Saved >= rm.Victims.Count / 2 && rm.Medical.Count >= 1,
+            $"{rm.EndReason} · puntos médicos {rm.Medical.Count} · pasos {rm.StepCount}");
         Check("Misión en escenario 40e9efb1 (30 m/celda)", sm.Samples > 0 && sm.Rover.Collisions == 0, $"{Mission.StateName(sm.State)} · muestras {sm.Samples} · {sm.Metrics()["distancia_m"]} m · {sm.EndReason}");
         GD.Print($"[SelfTest] {(fails == 0 ? "TODO OK" : $"{fails} FALLOS")}");
         return fails == 0 ? 0 : 1;

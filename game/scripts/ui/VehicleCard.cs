@@ -33,7 +33,7 @@ public partial class VehicleCard : Control
         var m = Mission;
         var cam = GetViewport()?.GetCamera3D();
         if (m == null || cam == null || !IsVisibleInTree()) return;
-        Size = new Vector2(W, m.Heli ? 112 : 96);
+        Size = new Vector2(W, (m.Heli ? 112 : 96) + (m.Rescue ? 15 : 0));
         var world = WorldPos + Vector3.Up * LiftUnits;
         if (cam.IsPositionBehind(world)) return;
         Vector2 sp = cam.UnprojectPosition(world);
@@ -71,7 +71,9 @@ public partial class VehicleCard : Control
         var act = d?.Action ?? RoverAction.Esperar;
         DrawCircle(new Vector2(18, 18), 13, new Color(col, 0.2f));
         Icons.Draw(this, Icons.Action(act), new Vector2(18, 18), 16, col);
-        Gfx.Text(this, new Vector2(36, 5), Icons.Verb(act) + (act == RoverAction.Avanzar && d != null ? $" {d.Speed * m.Rover.VmaxMs:0.#} m/s" : ""), 12, col, W - 40);
+        string verb = act == RoverAction.Muestrear && m.Rescue ? (m.Medical.Exists(x => x.Cell == m.Rover.Pos) && m.OnBoard > 0 ? "ENTREGAR" : "RESCATAR") : Icons.Verb(act);
+        if (act == RoverAction.Muestrear && m.Rescue) Icons.Draw(this, verb == "ENTREGAR" ? "cross" : "person", new Vector2(18, 18), 16, col);
+        Gfx.Text(this, new Vector2(36, 5), verb + (act == RoverAction.Avanzar && d != null ? $" {d.Speed * m.Rover.VmaxMs:0.#} m/s" : ""), 12, col, W - 40);
         Gfx.Text(this, new Vector2(36, 20), d?.Code ?? "", 9, UiTheme.Dim, W - 40);
 
         float y = 38;
@@ -92,6 +94,11 @@ public partial class VehicleCard : Control
         float wind = m.Planet.AirDensity > 0 ? m.Env.WindGust / MathF.Max(1, m.WindLimitMs) : 0;
         var wc = wind > 1 ? UiTheme.Crit : wind > 0.75f ? UiTheme.Warn : UiTheme.Info;
         Row("wind", wc, wind, wc, m.Planet.AirDensity > 0 ? $"{m.Env.WindGust:0}/{m.WindLimitMs:0}" : "—");
+        if (m.Rescue)
+        {
+            var oc = m.OnBoard >= m.Capacity ? UiTheme.Warn : UiTheme.Ok;
+            Row("person", oc, m.OnBoard / (float)m.Capacity, oc, $"{m.OnBoard}/{m.Capacity} a bordo");
+        }
         if (heli)
         {
             var mc = m.HeliMargin < 1 ? UiTheme.Crit : m.HeliMargin < 1.12f ? UiTheme.Warn : UiTheme.Ok;

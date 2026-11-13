@@ -150,6 +150,7 @@ public partial class Main : Node3D, IGameHost
         _worldRoot.AddChild(new DroneView { Name = "Drone", Mission = _mission, Rover = _robot });
         _crew = new CrewView { Name = "Crew", Mission = _mission };
         _worldRoot.AddChild(_crew);
+        if (_mission.Rescue) _worldRoot.AddChild(new RescueView { Name = "Rescue", Mission = _mission });
         if (_mission.Map.City is { Buildings.Count: > 0 })
         {
             var rv = _robot;
@@ -650,6 +651,7 @@ public partial class Main : Node3D, IGameHost
             if (a.StartsWith("--planet=")) cfg.PlanetId = a[9..];
             if (a.StartsWith("--seed=")) cfg.Seed = a[7..].ToInt();
             if (a == "--mode=auto") cfg.Mode = MissionMode.Autonomo;
+            if (a == "--mode=rescate") cfg.Mode = MissionMode.Rescate;
             if (a == "--heli") cfg.Heli = true;
             if (a.StartsWith("--battery=")) cfg.BatteryPct = a[10..].ToFloat();
             if (a.StartsWith("--scenario=")) { cfg.PlanetId = "tierra"; cfg.Scenario = Scenarios.Load(a[11..]); }

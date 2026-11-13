@@ -12,7 +12,7 @@ namespace AresX.Sim;
 
 public enum MissionState { Configuracion, Exploracion, Alerta, Replanificacion, Refugio, ModoSeguro, Exito, Fracaso }
 
-public enum MissionMode { Destino, Autonomo }
+public enum MissionMode { Destino, Autonomo, Rescate }
 
 public enum DestVerdict { Viable, Arriesgado, SoloIda, EnergiaInsuficiente, Inalcanzable }
 
@@ -71,6 +71,8 @@ public sealed class MissionConfig
     public string? Validate()
     {
         var p = PlanetProfile.Get(PlanetId);
+        if (Mode == MissionMode.Rescate && (p.Style != TerrainStyle.Tierra || !Heli))
+            return "La misión de rescate es para el helicóptero en la Tierra (personas atrapadas en montaña, aluviones o inundaciones): elija Modo = Helicóptero.";
         if (Heli && p.Style != TerrainStyle.Tierra)
             return "El helicóptero solo opera en la Tierra: necesita una atmósfera densa (en Marte el aire es ~1 % del terrestre).";
         if (!p.SolidSurface && !Probe)
@@ -223,6 +225,7 @@ public sealed partial class Mission
         InitDrone((ulong)cfg.Seed);
         Cost = new CostModel(Belief, Map, Rover);
         InitHeli();
+        InitRescue((ulong)cfg.Seed);
         Trail.Add(Rover.Pos);
         Belief.ConfirmFree(Rover.Pos);
         Target = Map.Start;
@@ -460,7 +463,7 @@ public sealed partial class Mission
 
         Cell HeadingOf(Cell? prop) => prop is Cell pp && pp != Rover.Pos ? pp - Rover.Pos : Rover.Dir;
         Cell heading = HeadingOf(proposal);
-        if (proposal is Cell pr && !Map.InBounds(pr))
+        if (proposal is Cell pr && !(Heli ? Map.InGrid(pr) : Map.InBounds(pr)))
         {
             AddLog("veto", $"S-05 · movimiento fuera del mapa hacia {pr}: rechazado");
             proposal = null;
@@ -590,7 +593,9 @@ public sealed partial class Mission
         {
             d.Action = RoverAction.Muestrear;
             d.Code = "S-40";
-            d.Reason = "En el sitio científico: tomar y analizar muestra";
+            d.Reason = !Rescue ? "En el sitio científico: tomar y analizar muestra"
+                     : Medical.Any(m => m.Cell == Rover.Pos) && OnBoard > 0 ? "En el punto médico: entregar a las personas rescatadas"
+                     : "Junto a la persona atrapada: la tripulación la sube a bordo";
             d.Explanation = $"{d.Code} · {d.Reason}";
         }
 
@@ -601,6 +606,7 @@ public sealed partial class Mission
             d.Explanation = $"{d.Code} · {d.Reason}";
         }
         Execute(d, proposal, click);
+        UpdateVictims(LastStepSeconds);
         EvaluateDroneDecision();
         UpdateDrone(LastStepSeconds);
 
@@ -684,6 +690,12 @@ public sealed partial class Mission
     private void PlanMission()
     {
         _needMissionPlan = false;
+        if (Rescue)
+        {
+            PlanRescue();
+            _needRoute = true;
+            return;
+        }
         if (Config.UseGa)
         {
             Plan = new MissionGA(Cost, _rngGa.Fork((ulong)StepCount + 1)).Run(Rover.Pos, ReserveWh, Config.ScienceWeight);
@@ -712,6 +724,11 @@ public sealed partial class Mission
 
     private void ChooseNextTarget()
     {
+        if (Rescue)
+        {
+            ChooseRescueTarget();
+            return;
+        }
         var next = Plan?.Order.FirstOrDefault(x => !x.Visited);
         if (next != null) SetTarget(next.Cell, $"{next.Name} · {next.Kind}");
         else SetTarget(Plan?.FinalRefuge ?? NearestRefuge, "refugio (fin de misión)");
@@ -778,6 +795,17 @@ public sealed partial class Mission
 
     private void HandleNoRoute()
     {
+        if (Rescue)
+        {
+            var vv = Victims.FirstOrDefault(v => v.Cell == Target && v.Active && !v.OnBoard);
+            if (vv != null)
+            {
+                vv.Unreachable = true;
+                AddLog("alerta", $"{vv.Name}: sin ruta conocida hasta la persona; se replanifica el rescate");
+            }
+            _needMissionPlan = true;
+            return;
+        }
         if (Config.ClickMode && !_goingRefuge)
         {
             AddLog("veto", $"Destino {Target} inalcanzable con la información actual: el rover se detiene y espera otra orden");
@@ -889,6 +917,10 @@ public sealed partial class Mission
                 if (Rover.Probe) ProbeDrift();
                 break;
             }
+            case RoverAction.Muestrear when Rescue:
+                dt = DoRescueAction();
+                if (Heli) driveJ = HeliWaitJ(dt);
+                break;
             case RoverAction.Muestrear:
                 dt = 90f;
                 if (Heli)
@@ -920,6 +952,9 @@ public sealed partial class Mission
         PhysicsUpdate(dt, driveJ, recharge, safe, moved, moveM);
 
         // llegada
+        if (moved && Rescue && Rover.Pos == Target &&
+            (Victims.Any(v => v.Cell == Rover.Pos && v.Active && !v.OnBoard) || Medical.Any(m => m.Cell == Rover.Pos) && OnBoard > 0))
+            PendingSample = true;   // rescatar o entregar en el siguiente paso
         if (moved && Rover.Pos == Target)
         {
             var site = Map.Sites.FirstOrDefault(x => x.Cell == Rover.Pos && !x.Visited);
@@ -1162,7 +1197,15 @@ public sealed partial class Mission
             }
         }
         bool planDone = Plan == null ? Target == NearestRefuge || Map.Refuges.Contains(Target) : Plan.Order.All(x => x.Visited);
-        if (!Config.ClickMode && Map.Refuges.Contains(Rover.Pos) && planDone && Map.Refuges.Contains(Target) && StepCount > 1 && !PendingSample && !Charging)
+        if (Rescue && RescueDone)
+        {
+            State = Saved > 0 ? MissionState.Exito : MissionState.Fracaso;
+            EndReason = $"rescate: {Saved} de {Victims.Count} personas entregadas con vida" + (LostCount > 0 ? $", {LostCount} no sobrevivieron" : "") +
+                        (Victims.Any(v => v.Unreachable) ? $", {Victims.Count(v => v.Unreachable)} inalcanzables" : "");
+            AddLog(Saved > 0 ? "ok" : "fallo", $"{(Saved > 0 ? "ÉXITO" : "FRACASO")}: {EndReason}");
+            return;
+        }
+        if (!Config.ClickMode && !Rescue && Map.Refuges.Contains(Rover.Pos) && planDone && Map.Refuges.Contains(Target) && StepCount > 1 && !PendingSample && !Charging)
         {
             State = MissionState.Exito;
             int left = Map.Sites.Count(x => !x.Visited);
@@ -1439,6 +1482,9 @@ public sealed partial class Mission
         ["ms_ag_total"] = MathF.Round(GaMsTotal, 1),
         ["ms_decision_medio"] = StepCount == 0 ? 0 : MathF.Round(DecisionMsTotal / StepCount, 3),
         ["despliegues_dron"] = Drone.Deployments,
+        ["rescatadas"] = Saved,
+        ["perdidas"] = LostCount,
+        ["victimas"] = Victims.Count,
         ["objetivos_dron"] = Drone.ObjectivesFound,
         ["celdas_dron"] = Drone.CellsScanned,
     };

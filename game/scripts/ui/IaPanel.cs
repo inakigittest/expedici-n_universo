@@ -34,7 +34,10 @@ public partial class IaPanel : Control
 
     public override void _Process(double delta)
     {
-        if (IsVisibleInTree()) QueueRedraw();
+        if (!IsVisibleInTree()) return;
+        float h = Sections.Length * SecH + (Mission?.Rescue == true ? 26 + Mission.Victims.Count * 16 : 0);
+        if (MathF.Abs(CustomMinimumSize.Y - h) > 0.5f) CustomMinimumSize = new Vector2(0, h);
+        QueueRedraw();
     }
 
     private int SectionAt(Vector2 p) => Math.Clamp((int)(p.Y / SecH), 0, Sections.Length - 1);
@@ -86,6 +89,31 @@ public partial class IaPanel : Control
                 case "ga": DrawGa(m, r, y0); break;
                 default: DrawSup(m, r, y0); break;
             }
+        }
+        if (m.Rescue) DrawRescue(m, Sections.Length * SecH, w);
+    }
+
+    /// <summary>Rescate: una fila por persona (estado, supervivencia restante y urgencia difusa).</summary>
+    private void DrawRescue(Mission m, float y0, float w)
+    {
+        var col = new Color("ff6a60");
+        DrawRect(new Rect2(2, y0 + 2, w - 4, 22 + m.Victims.Count * 16), new Color(col, 0.06f));
+        DrawRect(new Rect2(2, y0 + 2, 3, 22 + m.Victims.Count * 16), col);
+        Icons.Draw(this, "person", new Vector2(16, y0 + 12), 14, col);
+        Gfx.Text(this, new Vector2(28, y0 + 4), $"RESCATE  {m.Saved}/{m.Victims.Count} · a bordo {m.OnBoard}/{m.Capacity}", 10, col, w - 32);
+        float y = y0 + 24;
+        foreach (var v in m.Victims)
+        {
+            string icon = v.Delivered ? "cross" : v.OnBoard ? "person" : v.Lost ? "veto" : v.Unreachable ? "warn" : "target";
+            var ic = v.Delivered ? UiTheme.Ok : v.OnBoard ? UiTheme.Info : v.Lost || v.Unreachable ? UiTheme.Dim : col;
+            Icons.Draw(this, icon, new Vector2(16, y + 6), 11, ic);
+            Gfx.Text(this, new Vector2(26, y - 1), v.Name, 10, ic);
+            float pct = v.SurvivalMaxS > 0 ? v.SurvivalS / v.SurvivalMaxS : 0;
+            var bc = pct < 0.3f ? UiTheme.Crit : pct < 0.6f ? UiTheme.Warn : UiTheme.Ok;
+            if (!v.Delivered && !v.Lost) Gfx.Bar(this, new Rect2(52, y + 3, w - 52 - 56, 7), pct, bc);
+            Gfx.Text(this, new Vector2(0, y - 1), v.Delivered ? "salvada" : v.Lost ? "—" : $"{v.SurvivalS / 60:0}′", 9, Colors.White, w - 30, HorizontalAlignment.Right);
+            if (v.Active) DrawCircle(new Vector2(w - 18, y + 6), 4.5f, new Color(1f, 0.35f, 0.25f, 0.25f + 0.75f * v.Urgency));
+            y += 16;
         }
     }
 

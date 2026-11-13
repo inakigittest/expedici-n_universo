@@ -62,7 +62,8 @@ public partial class TopBar : Control
         int hh = (int)m.Env.LocalHour, mm = (int)((m.Env.LocalHour - hh) * 60);
         Chip($"SOL {m.Env.Sol:000} · {hh:00}:{mm:00} {(m.Env.IsDay ? "☀" : "☾")}", m.Env.IsDay ? UiTheme.Accent : new Color("9aa8ff"));
         Chip(Mission.StateName(m.State), UiTheme.StateColor(m.State), true);
-        Chip(m.Config.ClickMode ? (m.HasDestination ? "→ DESTINO" : "ESPERANDO DESTINO") : "AUTÓNOMO", m.Config.ClickMode ? UiTheme.Fuzzy : UiTheme.Rna);
+        Chip(m.Config.ClickMode ? (m.HasDestination ? "→ DESTINO" : "ESPERANDO DESTINO") : m.Rescue ? $"RESCATE {m.Saved}/{m.Victims.Count}" : "AUTÓNOMO",
+             m.Config.ClickMode ? UiTheme.Fuzzy : m.Rescue ? new Color("ff6a60") : UiTheme.Rna);
         if (!compact)
         {
             Chip(m.Config.AblationName, m.Config.UseRna && m.Config.UseFuzzy && m.Config.UseGa ? UiTheme.Ok : UiTheme.Warn);
@@ -610,7 +611,8 @@ public partial class Hud : CanvasLayer
         bool ok = m.State == MissionState.Exito;
         _endText.Text = $"[font_size=22][color={(ok ? "#8cff9a" : "#ff5a4a")}]{(ok ? "ÉXITO" : "FRACASO")}[/color][/font_size]\n[color=#cfd8e8]{m.EndReason}[/color]\n\n" +
             $"[table=4][cell][color=#8a96aa]Pasos[/color][/cell][cell]{met["pasos"]}[/cell][cell][color=#8a96aa]Tiempo de misión[/color][/cell][cell]{(float)met["tiempo_mision_s"] / 60:0.0} min[/cell]" +
-            $"[cell][color=#8a96aa]Ciencia[/color][/cell][cell]{met["ciencia"]} ({met["muestras"]} muestras)[/cell][cell][color=#8a96aa]Energía restante[/color][/cell][cell]{met["energia_restante_pct"]} %[/cell]" +
+            (m.Rescue ? $"[cell][color=#8a96aa]Personas salvadas[/color][/cell][cell]{met["rescatadas"]} de {met["victimas"]} (perdidas {met["perdidas"]})[/cell]" :
+            $"[cell][color=#8a96aa]Ciencia[/color][/cell][cell]{met["ciencia"]} ({met["muestras"]} muestras)[/cell]") + $"[cell][color=#8a96aa]Energía restante[/color][/cell][cell]{met["energia_restante_pct"]} %[/cell]" +
             $"[cell][color=#8a96aa]Distancia[/color][/cell][cell]{met["distancia_m"]} m[/cell][cell][color=#8a96aa]Replanificaciones[/color][/cell][cell]{met["replanificaciones"]}[/cell]" +
             $"[cell][color=#8a96aa]Vetos[/color][/cell][cell]{met["vetos"]}[/cell][cell][color=#8a96aa]Barrancos evitados[/color][/cell][cell]{met["barrancos_evitados"]}[/cell]" +
             $"[cell][color=#8a96aa]Colisiones / caídas[/color][/cell][cell]{met["colisiones"]} / {met["caidas"]}[/cell][cell][color=#8a96aa]Violaciones seguridad[/color][/cell][cell]{met["violaciones_seguridad"]}[/cell]" +
@@ -669,7 +671,9 @@ public partial class Hud : CanvasLayer
         else
         {
             string plan = m.Plan == null ? "plan: retorno al refugio" : $"plan: {string.Join("→", m.Plan.Order.Where(s => !s.Visited).Select(s => s.Name).DefaultIfEmpty("—"))}→refugio";
-            _objective.Text = $"OBJETIVO: {m.TargetName} {m.Target} · {plan} · muestras {m.Samples}/{m.Map.Sites.Count} · bodega {m.Rover.SampleKg:0.0}/{m.Rover.SampleCapKg:0} kg";
+            _objective.Text = m.Rescue
+                ? $"RESCATE → {m.TargetName} · plan: {string.Join("→", m.RescueOrder.Select(o => o is Victim v ? v.Name : ((MedicalPoint)o).Name.Replace("Puesto médico (base)", "base")))} · salvadas {m.Saved}/{m.Victims.Count} · a bordo {m.OnBoard}/{m.Capacity}"
+                : $"OBJETIVO: {m.TargetName} {m.Target} · {plan} · muestras {m.Samples}/{m.Map.Sites.Count} · bodega {m.Rover.SampleKg:0.0}/{m.Rover.SampleCapKg:0} kg";
         }
     }
 
