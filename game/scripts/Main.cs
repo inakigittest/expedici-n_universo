@@ -30,6 +30,7 @@ public partial class Main : Node3D, IGameHost
     private PropsView? _props;
     private OverlayView? _overlay;
     private RobotView? _robot;
+    private CrewView? _crew;
     private Mission? _mission;
     private NeuralPerception? _rna;
     private readonly ConcurrentQueue<string> _trainMsgs = new();
@@ -147,6 +148,13 @@ public partial class Main : Node3D, IGameHost
         _worldRoot.AddChild(_overlay);
         _worldRoot.AddChild(_robot);
         _worldRoot.AddChild(new DroneView { Name = "Drone", Mission = _mission, Rover = _robot });
+        _crew = new CrewView { Name = "Crew", Mission = _mission };
+        _worldRoot.AddChild(_crew);
+        if (_mission.Map.City is { Buildings.Count: > 0 })
+        {
+            var rv = _robot;
+            _worldRoot.AddChild(new CityView { Name = "City", Mission = _mission, Focus = () => rv.GlobalPosition });
+        }
         _overlay.Reset();
         _robot.Place(_mission.Rover.Pos);
         _cam.Target = _robot;
@@ -190,6 +198,14 @@ public partial class Main : Node3D, IGameHost
         else if (_mission.FrontCell is Cell f)
         {
             _robot.Face(f - _mission.Rover.Pos);
+        }
+        if (d?.Action == RoverAction.Muestrear && _crew != null)
+        {
+            // la tripulación baja, analiza junto al vehículo y vuelve a subir
+            var dir = new Vector3(_mission.Rover.Dir.X, 0, _mission.Rover.Dir.Y);
+            if (dir.LengthSquared() < 0.1f) dir = new Vector3(0, 0, 1);
+            var from = _robot.GlobalPosition;
+            _crew.StartSample(from, from + dir.Normalized() * 1.8f + new Vector3(0.6f, 0, 0), 2.8f / MathF.Sqrt(MathF.Max(1, SimSpeed)));
         }
         if (d != null && (d.Veto || _mission.LastCollision)) _robot.Hit();
         if (_mission.LastCollision) _cam.Shake(0.3f, 0.3f);
@@ -666,6 +682,7 @@ public partial class Main : Node3D, IGameHost
         if (_shotPath == null || _shotWait < 0) return;
         if (_shotWait == 20 && _labTab >= 0) _labs.Open(_labTab);
         if (--_shotWait > 0) return;
+        GD.Print($"[Expedición] fps {Engine.GetFramesPerSecond():0} · triángulos {RenderingServer.GetRenderingInfo(RenderingServer.RenderingInfo.TotalPrimitivesInFrame)} · llamadas {RenderingServer.GetRenderingInfo(RenderingServer.RenderingInfo.TotalDrawCallsInFrame)}");
         var img = GetViewport().GetTexture().GetImage();
         img.SavePng(_shotPath);
         GD.Print($"[Expedición] Captura guardada en {_shotPath}");

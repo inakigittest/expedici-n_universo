@@ -262,6 +262,7 @@ public partial class PropsView : Node3D
             var c = new Cell(x, y);
             var h = map.Hazards[map.Idx(c)];
             if (h is Hazard.None or Hazard.Cliff or Hazard.Crater or Hazard.Water or Hazard.Downdraft or Hazard.Alien) continue;
+            if (h == Hazard.Building && map.City is { Buildings.Count: > 0 }) continue;   // la ciudad simulada dibuja sus edificios
             var key = h == Hazard.Debris ? Hazard.Rock : h;
             if (!groups.TryGetValue(key, out var list)) groups[key] = list = new();
             var center = Grid.CellCenter(c);
@@ -547,9 +548,9 @@ public partial class OverlayView : Node3D
             else if (ShowRisk && b.Observed[i])
             {
                 float rk = b.Risk(c);
-                if (rk > 0.15f)
+                if (rk > 0.35f)   // en mapas a escala: solo el riesgo relevante (menos ruido visual)
                 {
-                    var col = rk < 0.5f ? new Color(1f, 0.9f, 0.2f).Lerp(new Color(1f, 0.5f, 0.1f), (rk - 0.15f) / 0.35f)
+                    var col = rk < 0.5f ? new Color(1f, 0.9f, 0.2f).Lerp(new Color(1f, 0.5f, 0.1f), (rk - 0.35f) / 0.15f)
                                         : new Color(1f, 0.5f, 0.1f).Lerp(new Color(1f, 0.1f, 0.1f), (rk - 0.5f) / 0.5f);
                     col.A = 0.14f + 0.26f * rk;
                     Set(col);

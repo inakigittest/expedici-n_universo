@@ -96,6 +96,10 @@ public static class HeadlessRunner
             {
                 var dd = m.Map.BfsDistance(m.Map.Start, m.Map.Passable);
                 int inside = m.Map.Inside!.Count(x => x), reach = dd.Count(x => x >= 0);
+                if (m.Map.City is { } city)
+                    GD.Print($"[Diag] ciudad simulada: {city.UrbanKm2:0.0} km² urbanos · {city.Buildings.Count} edificios · {city.Hospitals.Count} hospitales · " +
+                             string.Join(", ", city.Buildings.GroupBy(b => b.Type).OrderByDescending(g => g.Count()).Select(g => $"{CityPlan.Name(g.Key)} {g.Count()}")) +
+                             $" · celdas edificio {m.Map.Hazards.Count(h => h == Hazard.Building)} · calles {city.Street.Count(x => x)}");
                 GD.Print($"[Diag] celdas en polígono {inside} · alcanzables desde la base {reach} ({(float)reach / inside:P0}) · sitios {m.Map.Sites.Count} · refugios {m.Map.Refuges.Count} · base {m.Map.Start} · pendientes calc {string.Join(" ", m.Map.SlopeHistogram.Select(b => b.ToString("P0")))} vs informe {string.Join(" ", sc.SlopeBins.Select(b => b.ToString("P0")))}");
             }
             GD.Print($"[Diag] {m.WorldName}: {Mission.StateName(m.State)} · {m.EndReason}");

@@ -37,6 +37,7 @@ public sealed class WorldMap
     public float DropScale => RefCellM / CellM;
     public GeoReport Geo = GeoReport.Santiago;   // clima y calibración (Tierra)
     public bool[]? Inside;                   // escenarios: celda dentro del polígono analizado
+    public CityPlan? City;                   // escenarios: ciudad simulada sobre la mancha urbana
     public const int Sub = 3;               // vértices de relieve por celda (vista 3D)
     public const float MaxSlopeDeg = 30f;   // pendiente máxima de rodadura (SUPUESTO)
     public const float CliffDropM = 5f;     // salto vertical que se considera precipicio
@@ -716,6 +717,16 @@ public sealed class WorldMap
         Inside = new bool[n * n];
         for (int i = 0; i < n * n; i++) Inside[i] = g.CoverGrid![i] != 255;
         float rockDensity = new[] { 0.02f, 0.04f, 0.07f }[Difficulty];
+        // suelos primero: la ciudad simulada se genera sobre la mancha urbana de WorldCover
+        for (int i = 0; i < n * n; i++)
+        {
+            if (!Inside[i]) continue;
+            var so = g.SoilOf(g.CoverGrid![i]);
+            if (((g.Marks?[i] ?? 0) & 2) != 0 && so is not (Soil.Agua or Soil.Urbano)) so = Soil.Quemado;
+            Soils[i] = so;
+        }
+        City = CityPlan.Generate(this, StableHash(g.Id) ^ 0x5eed);
+        var coverage = City.CellCoverage(n, CellM, out var cityH);
         for (int y = 0; y < n; y++)
         for (int x = 0; x < n; x++)
         {
@@ -736,6 +747,7 @@ public sealed class WorldMap
             if (soil == Soil.Agua) hz = Hazard.Water;
             else if (sl > 40f || (g.SlopeGrid?[i] == 4 && MaxDrop(c) * DropScale > CliffDropM * 0.8f)) hz = Hazard.Cliff;   // escarpe
             else if ((marks & 1) != 0 && rng.Chance(0.55f)) hz = Hazard.Debris;
+            else if (soil == Soil.Urbano && City.Buildings.Count > 0) hz = !City.Street[i] && coverage[i] >= 0.15f ? Hazard.Building : Hazard.None;   // interior de manzana con edificios
             else if (soil == Soil.Urbano && rng.Chance(0.22f + Difficulty * 0.05f)) hz = Hazard.Building;
             else if (soil == Soil.Bosque && rng.Chance(0.2f + Difficulty * 0.05f + MathF.Max(0, noise.Fbm(x * 0.09f, y * 0.09f, 2)) * 0.3f)) hz = Hazard.Tree;
             else if (soil is Soil.SueloDesnudo or Soil.Matorral && rng.Chance(rockDensity * (0.6f + sl / 20f))) hz = Hazard.Rock;
@@ -750,7 +762,7 @@ public sealed class WorldMap
             Hazards[i] = hz;
             ObstacleH[i] = hz switch
             {
-                Hazard.Rock => rng.Range(0.8f, 2.6f), Hazard.Building => rng.Range(6f, 18f), Hazard.Tree => rng.Range(8f, 22f),
+                Hazard.Rock => rng.Range(0.8f, 2.6f), Hazard.Building => cityH[i] > 0 ? cityH[i] : rng.Range(6f, 18f), Hazard.Tree => rng.Range(8f, 22f),
                 Hazard.Debris => rng.Range(0.8f, 2.2f), _ => 0,
             };
         }

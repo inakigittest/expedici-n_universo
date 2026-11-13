@@ -48,3 +48,14 @@ texture={
 [input_devices]
 
 pointing/emulate_mouse_from_touch=true
+
+[shader_globals]
+
+player_pos={
+"type": "vec3",
+"value": Vector3(0, 0, 0)
+}
+cutaway_radius={
+"type": "float",
+"value": 0.0
+}

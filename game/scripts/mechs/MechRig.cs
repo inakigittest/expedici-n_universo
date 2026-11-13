@@ -23,7 +23,35 @@ public partial class MechRig : Node3D
     /// <summary>Cuánto se acerca el mecha a la cámara para que los pies no se hundan en el suelo.</summary>
     [Export] public float DepthBias { get; set; } = 0.3f;
 
-    public MechSkeletonData Skeleton { get; private set; } = null!;
+    /// <summary>Familia de sprites: "mechs" o "pilots" (assets/&lt;familia&gt;). Fijarla antes de añadir el nodo.</summary>
+    [Export] public string Family { get; set; } = MechSkeletonData.Mechs;
+
+    private MechSkeletonData? _skeleton;
+    public MechSkeletonData Skeleton => _skeleton ??= MechSkeletonData.Get(Family);
+
+    private Color[]? _paint;
+
+    /// <summary>
+    /// Pintura (familia de pilotos): 21 colores que sustituyen a los colores clave del sprite (traje, ribete y visor;
+    /// ver MechSkeletonData.Paints). null = sin pintura.
+    /// </summary>
+    public void SetPaint(Color[]? colors)
+    {
+        _paint = colors;
+        foreach (var m in _materials.Values)
+            ApplyPaint(m);
+    }
+
+    /// <summary>Pinta con la paleta de un fabricante (claves de skeleton.json → paints; "player" = el jugador).</summary>
+    public void SetPaint(string maker) =>
+        SetPaint(Skeleton.Paints.TryGetValue(maker, out var c) ? c : Skeleton.Paints.GetValueOrDefault("player"));
+
+    private void ApplyPaint(ShaderMaterial m)
+    {
+        m.SetShaderParameter("use_paint", _paint != null);
+        if (_paint != null)
+            m.SetShaderParameter("paint", _paint);
+    }
     /// <summary>Animación de las piernas (y de todo el cuerpo si la parte superior no tiene una propia).</summary>
     public string Anim => _lower.Anim;
     public int Frame => _lower.Frame;
@@ -60,18 +88,99 @@ public partial class MechRig : Node3D
     private readonly Dictionary<string, MeshInstance3D> _meshes = new();
     private readonly Dictionary<string, Vector3> _pos = new();
     private readonly Dictionary<string, (MechPartData Part, string Anim)> _bound = new();
-    private float _glow;
+    private float _glow, _flash, _outline, _scale = 1f;
+
+    /// <summary>Armas guardadas a la vista como máximo (dos en la espalda y una en cada muslo).</summary>
+    public const int MaxStowed = 4;
+    private readonly List<(MechPartData Part, string Mount)> _stowed = new();
+
+    /// <summary>
+    /// Armas guardadas (de los juegos no activos) con su montaje: stow_back_r/l (espalda, del torso) o holster_r/l
+    /// (muslos, de las piernas). Se dibujan con la hoja 'stow_back' / 'stow_leg' del arma; sin montaje no se ven.
+    /// </summary>
+    public void SetStowed(IEnumerable<(string Id, string? Mount)> items)
+    {
+        _stowed.Clear();
+        foreach (var (id, mount) in items)
+            if (mount != null && _stowed.Count < MaxStowed)
+                _stowed.Add((MechPartData.Get(id, mount.EndsWith("_l") ? "weapon_l" : "weapon_r", Skeleton.RootPath), mount));
+    }
+    private readonly Dictionary<string, (Vector2 Center, Vector2 Size)> _rects = new();
+
+    /// <summary>Tamaño del mecha entero (1 = normal). Los líderes enemigos son más grandes sin modelo nuevo.</summary>
+    public float SizeScale
+    {
+        get => _scale;
+        set
+        {
+            _scale = value;
+            foreach (var m in _materials.Values)
+                m.SetShaderParameter("scale", value);
+        }
+    }
+
+    /// <summary>Contorno de la silueta (0 = sin contorno).</summary>
+    public void SetOutline(Color color, float amount)
+    {
+        if (Mathf.IsEqualApprox(amount, _outline) && amount == 0)
+            return;
+        _outline = amount;
+        foreach (var m in _materials.Values)
+        {
+            m.SetShaderParameter("outline", amount);
+            m.SetShaderParameter("outline_color", color);
+        }
+    }
+
+    /// <summary>Destello blanco de impacto, 0..1.</summary>
+    public void SetFlash(float amount)
+    {
+        if (Mathf.IsEqualApprox(amount, _flash))
+            return;
+        _flash = amount;
+        foreach (var m in _materials.Values)
+            m.SetShaderParameter("flash", amount);
+    }
+
+    /// <summary>
+    /// Rectángulo que ocupa ahora la pieza de una ranura, en píxeles de sprite respecto al origen del mecha (Y arriba,
+    /// sin aplicar SizeScale): sirve para colocar efectos sobre una pieza (los ojos de un líder sobre la cabeza).
+    /// </summary>
+    public bool TryGetSlotRect(string slot, out Vector2 center, out Vector2 size)
+    {
+        bool ok = _rects.TryGetValue(slot, out var r) && _meshes[slot].Visible;
+        center = r.Center;
+        size = r.Size;
+        return ok;
+    }
+
+    /// <summary>
+    /// Desplazamiento (local, en el mundo) que en pantalla queda 'marginPx' píxeles de sprite por encima de la cabeza:
+    /// para placas y barras sobre el mecha. Se mueve en el plano de la cámara, como los sprites.
+    /// </summary>
+    public Vector3 AboveHead(float marginPx)
+    {
+        float top = TryGetSlotRect("head", out var c, out var size) ? c.Y + size.Y / 2 : 110f;
+        var cam = GetViewport()?.GetCamera3D();
+        Vector3 up = cam?.GlobalBasis.Y ?? Vector3.Up;
+        return up * (top + marginPx) * Skeleton.PixelSize * _scale;
+    }
+
+    /// <summary>Dirección (0-7) con la que se dibuja la pieza de una ranura.</summary>
+    public int SlotDirection(string slot) => Pose(slot).Dir;
 
     public override void _Ready()
     {
-        Skeleton = MechSkeletonData.Get();
         _shader ??= GD.Load<Shader>("res://shaders/mech_part.gdshader");
         float span = Skeleton.Cell * Skeleton.PixelSize;
-        foreach (string slot in Skeleton.Slots)
+        var layers = Skeleton.Slots.Concat(Enumerable.Range(0, MaxStowed).Select(i => $"stow{i}"));
+        foreach (string slot in layers)
         {
             var mat = new ShaderMaterial { Shader = _shader };
             mat.SetShaderParameter("pixel_size", Skeleton.PixelSize);
             mat.SetShaderParameter("depth_range", Skeleton.DepthRange);
+            mat.SetShaderParameter("scale", _scale);
+            ApplyPaint(mat);
             _materials[slot] = mat;
             var mesh = new MeshInstance3D
             {
@@ -80,7 +189,7 @@ public partial class MechRig : Node3D
                 MaterialOverride = mat,
                 CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
                 // el shader agranda el quad hasta la celda: caja de culling a mano
-                CustomAabb = new Aabb(new Vector3(-span, -span, -span), new Vector3(2 * span, 2 * span, 2 * span)),
+                CustomAabb = new Aabb(new Vector3(-2 * span, -2 * span, -2 * span), new Vector3(4 * span, 4 * span, 4 * span)),
             };
             _meshes[slot] = mesh;
             AddChild(mesh);
@@ -95,7 +204,7 @@ public partial class MechRig : Node3D
             if (part == null)
                 _parts.Remove(slot);
             else
-                _parts[slot] = MechPartData.Get(part, slot);
+                _parts[slot] = MechPartData.Get(part, slot, Skeleton.RootPath);
         }
         Changed();
     }
@@ -113,7 +222,7 @@ public partial class MechRig : Node3D
         {
             if (!Skeleton.Fits(partId, slot))
                 throw new ArgumentException($"{partId} no encaja en la ranura {slot}");
-            _parts[slot] = MechPartData.Get(partId, slot);
+            _parts[slot] = MechPartData.Get(partId, slot, Skeleton.RootPath);
         }
         Changed();
     }
@@ -193,7 +302,6 @@ public partial class MechRig : Node3D
     {
         if (!IsComplete)
             return;
-        int cell = Skeleton.Cell;
         Vector3 rootPx = PlaceLegs();
         foreach (string slot in Skeleton.Slots)
         {
@@ -217,24 +325,56 @@ public partial class MechRig : Node3D
             else if (!_pos.ContainsKey(slot))
                 _pos[slot] = Vector3.Zero;
 
-            var mat = _materials[slot];
-            if (!_bound.TryGetValue(slot, out var b) || b.Part != part || b.Anim != anim)
-            {
-                var (color, depth) = part.Sheet(anim);
-                mat.SetShaderParameter("albedo_tex", color);
-                mat.SetShaderParameter("depth_tex", depth);
-                mat.SetShaderParameter("sheet_size", color.GetSize());
-                _bound[slot] = (part, anim);
-            }
-            Vector3 p = _pos[slot];
-            // hoja recortada: la celda es el rectángulo crop; su centro se desplaza respecto al de la celda completa
-            var c = part.Crop(anim, cell);
-            mat.SetShaderParameter("region", new Vector4(frame * c.Size.X, dir * c.Size.Y, c.Size.X, c.Size.Y));
-            var cropShift = new Vector2(c.Position.X + c.Size.X / 2 - cell / 2, -(c.Position.Y + c.Size.Y / 2 - cell / 2));
-            mat.SetShaderParameter("offset_px", Skeleton.BaseOffset + cropShift + new Vector2(Mathf.Round(p.X), -Mathf.Round(p.Y)));
-            mat.SetShaderParameter("layer_depth", p.Z);
-            mat.SetShaderParameter("depth_bias", DepthBias);
+            DrawLayer(slot, part, anim, dir, frame, _pos[slot]);
         }
+        PlaceStowed();
+    }
+
+    /// <summary>Coloca las armas guardadas en sus montajes del torso (espalda) o de las piernas (muslos).</summary>
+    private void PlaceStowed()
+    {
+        bool wreck = _lower.Anim == "wreck";
+        for (int i = 0; i < MaxStowed; i++)
+        {
+            string key = $"stow{i}";
+            bool on = !wreck && i < _stowed.Count;
+            if (on)
+            {
+                var (part, mount) = _stowed[i];
+                bool back = mount.StartsWith("stow_back");
+                string parent = back ? "torso" : "legs", anim = back ? "stow_back" : "stow_leg";
+                var (pa, pd, pf) = Pose(parent);
+                Vector3 socket = default, anchor = default;
+                on = Skeleton.Anims.ContainsKey(anim) && _parts[parent].TryPoint(mount, pa, pd, pf, out socket) &&
+                     part.TryPoint("stow", anim, pd, 0, out anchor);
+                if (on)
+                    DrawLayer(key, part, anim, pd, 0, _pos[parent] + socket - anchor);
+            }
+            _meshes[key].Visible = on;
+        }
+    }
+
+    private void DrawLayer(string key, MechPartData part, string anim, int dir, int frame, Vector3 p)
+    {
+        int cell = Skeleton.Cell;
+        var mat = _materials[key];
+        if (!_bound.TryGetValue(key, out var b) || b.Part != part || b.Anim != anim)
+        {
+            var (color, depth) = part.Sheet(anim);
+            mat.SetShaderParameter("albedo_tex", color);
+            mat.SetShaderParameter("depth_tex", depth);
+            mat.SetShaderParameter("sheet_size", color.GetSize());
+            _bound[key] = (part, anim);
+        }
+        // hoja recortada: la celda es el rectángulo crop; su centro se desplaza respecto al de la celda completa
+        var c = part.Crop(anim, cell);
+        mat.SetShaderParameter("region", new Vector4(frame * c.Size.X, dir * c.Size.Y, c.Size.X, c.Size.Y));
+        var cropShift = new Vector2(c.Position.X + c.Size.X / 2 - cell / 2, -(c.Position.Y + c.Size.Y / 2 - cell / 2));
+        Vector2 offset = Skeleton.BaseOffset + cropShift + new Vector2(Mathf.Round(p.X), -Mathf.Round(p.Y));
+        mat.SetShaderParameter("offset_px", offset);
+        _rects[key] = (offset, c.Size);
+        mat.SetShaderParameter("layer_depth", p.Z);
+        mat.SetShaderParameter("depth_bias", DepthBias);
     }
 
     /// <summary>
