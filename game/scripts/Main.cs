@@ -24,6 +24,7 @@ public partial class Main : Node3D, IGameHost
     private Hud _hud = null!;
     private Labs _labs = null!;
     private CameraRig _cam = null!;
+    private FleetView? _fleet;
     private EnvironmentFx _fx = null!;
     private Node3D _worldRoot = null!;
     private TerrainView? _terrain;
@@ -151,12 +152,16 @@ public partial class Main : Node3D, IGameHost
         _worldRoot.AddChild(new DroneView { Name = "Drone", Mission = _mission, Rover = _robot });
         _crew = new CrewView { Name = "Crew", Mission = _mission, Vehicle = _robot };
         _worldRoot.AddChild(_crew);
+        RescueView? rescueView = null;
         if (_mission.Rescue)
         {
-            var rescueView = new RescueView { Name = "Rescue", Mission = _mission };
+            rescueView = new RescueView { Name = "Rescue", Mission = _mission };
             _worldRoot.AddChild(rescueView);
             _crew.Rescue = rescueView;
         }
+        if (_mission.FireMode) _worldRoot.AddChild(new FireView { Name = "Fire", Mission = _mission });
+        _fleet = new FleetView { Name = "Fleet", Mission = _mission, Rescue = rescueView, Main = _robot, SimSpeed = () => SimSpeed };
+        _worldRoot.AddChild(_fleet);
         if (_mission.Map.City is { Buildings.Count: > 0 })
         {
             var rv = _robot;
@@ -176,6 +181,7 @@ public partial class Main : Node3D, IGameHost
         _hud.Bind(_mission);
         _hud.CallDeferred(Hud.MethodName.InitLayout);
         _hud.ShowUi(true);
+        if (_mission.FireMode && _showRisk) { _showRisk = false; if (_overlay != null) _overlay.ShowRisk = false; }   // el riesgo RNA se confunde con el fuego
         _hud.UpdateToggles(_showRisk, _showTruth);
         _labs.Mission = _mission;
         _labs.Rna = _rna;
@@ -196,8 +202,9 @@ public partial class Main : Node3D, IGameHost
         if (_mission == null || _robot == null || _mission.Finished) return;
         var before = _mission.Rover.Pos;
         int logBefore = _mission.Log.Count;
-        var wasOnBoard = _mission.Victims.Where(v => v.OnBoard).Select(v => v.Id).ToHashSet();
+        var wasOnBoard = _mission.Victims.Where(v => v.OnBoard && v.Carrier == 0).Select(v => v.Id).ToHashSet();
         var wasDelivered = _mission.Victims.Where(v => v.Delivered).Select(v => v.Id).ToHashSet();
+        int dropsBefore = _mission.FireDrops;
         _mission.Step();
         var d = _mission.LastDecision;
         if (_mission.Rover.Pos != before)
@@ -214,11 +221,12 @@ public partial class Main : Node3D, IGameHost
         if (_crew != null)
         {
             // la tripulación sale (muestra, rescate o entrega) y el vehículo espera a que el piloto vuelva a subir
-            var picked = _mission.Victims.Where(v => v.OnBoard && !wasOnBoard.Contains(v.Id)).ToList();
-            var dropped = _mission.Victims.Where(v => v.Delivered && !wasDelivered.Contains(v.Id)).ToList();
+            var picked = _mission.Victims.Where(v => v.OnBoard && v.Carrier == 0 && !wasOnBoard.Contains(v.Id)).ToList();
+            var dropped = _mission.Victims.Where(v => v.Delivered && v.Carrier == 0 && !wasDelivered.Contains(v.Id)).ToList();
+            if (_mission.FireDrops > dropsBefore) _fleet?.WaterDrop(_robot.BodyPosition);
             if (picked.Count > 0) _crew.StartPickup(picked, SimSpeed);
             else if (dropped.Count > 0) _crew.StartDelivery(dropped, SimSpeed);
-            else if (d?.Action == RoverAction.Muestrear && !_mission.Rescue) _crew.StartSample(SimSpeed);
+            else if (d?.Action == RoverAction.Muestrear && !_mission.Rescue && !_mission.FireMode) _crew.StartSample(SimSpeed);
         }
         if (d != null && (d.Veto || _mission.LastCollision)) _robot.Hit();
         if (_mission.LastCollision) _cam.Shake(0.3f, 0.3f);
@@ -247,6 +255,13 @@ public partial class Main : Node3D, IGameHost
                 if (a.StartsWith("--config-scenario=")) { _config.SelectScenario(a[18..]); if (_args.Contains("--heli")) _config.SelectHeliForTest(); }
             foreach (var a in _args)
                 if (a.StartsWith("--config-import=")) { _config.ImportForTest(a[16..]); _shotWait = 900; }
+            foreach (var a in _args)
+                if (a.StartsWith("--config-planner="))
+                {
+                    _config.OpenPlannerForTest(a[17..] == "incendio", _args.FirstOrDefault(x => x.StartsWith("--plan-points="))?[14..] ?? "",
+                        _args.FirstOrDefault(x => x.StartsWith("--helis="))?[8..].ToInt() ?? 2, _args.FirstOrDefault(x => x.StartsWith("--trucks="))?[9..].ToInt() ?? 1);
+                    _shotWait = 240;
+                }
         }
         if (_mission == null || _robot == null) { HandleShot(); return; }
         if (_overlay != null) _overlay.RobotPos = _robot.GlobalPosition;
@@ -685,6 +700,12 @@ public partial class Main : Node3D, IGameHost
             if (a.StartsWith("--seed=")) cfg.Seed = a[7..].ToInt();
             if (a == "--mode=auto") cfg.Mode = MissionMode.Autonomo;
             if (a == "--mode=rescate") cfg.Mode = MissionMode.Rescate;
+            if (a == "--mode=incendio") cfg.Mode = MissionMode.Incendio;
+            if (a.StartsWith("--helis=")) cfg.Helis = a[8..].ToInt();
+            if (a.StartsWith("--trucks=")) cfg.Trucks = a[9..].ToInt();
+            if (a.StartsWith("--start=")) { var xy = a[8..].Split(','); cfg.StartCell = new Cell(xy[0].ToInt(), xy[1].ToInt()); }
+            if (a.StartsWith("--points="))
+                foreach (var p in a[9..].Split(';', StringSplitOptions.RemoveEmptyEntries)) { var xy = p.Split(','); cfg.Points.Add(new Cell(xy[0].ToInt(), xy[1].ToInt())); }
             if (a == "--heli") cfg.Heli = true;
             if (a.StartsWith("--battery=")) cfg.BatteryPct = a[10..].ToFloat();
             if (a.StartsWith("--scenario=")) { cfg.PlanetId = "tierra"; cfg.Scenario = Scenarios.Load(a[11..]); }
@@ -709,6 +730,7 @@ public partial class Main : Node3D, IGameHost
         foreach (var a in _args)
         {
             if (a.StartsWith("--zoom=")) { _cam.Zoom = a[7..].ToFloat(); _cam.Snap(); }
+            if (a.StartsWith("--follow=") && _fleet?.BodyOf(a[9..]) is Node3D fb) { _cam.Target = fb; _cam.Snap(); }
             if (a.StartsWith("--cam="))
                 for (int i = 0; i < 4 && CameraRig.ModeName(_cam.Mode).ToLowerInvariant().Replace("á", "a") is var n && !n.StartsWith(a[6..]); i++) CycleCamera();
         }

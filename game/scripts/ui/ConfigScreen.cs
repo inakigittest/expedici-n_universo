@@ -116,7 +116,20 @@ public partial class ConfigScreen : CanvasLayer
         _control.AddItem("Destino por clic (el operador elige, el rover evalúa y va)");
         _control.AddItem("Misión autónoma (el AG planifica sitios y regreso)");
         _control.AddItem("Rescate en helicóptero (personas atrapadas → hospital)");
+        _control.AddItem("Combate contra incendio (helicópteros + carros de bomberos)");
         Row("Dinámica", _control);
+        // flota y planificación en el mapa (rescate e incendio)
+        var planRow = new HBoxContainer();
+        planRow.AddThemeConstantOverride("separation", 6);
+        _planLabel = UiTheme.Label("", 11, UiTheme.Text);
+        _planLabel.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        _planLabel.ClipText = true;
+        _planLabel.TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis;
+        planRow.AddChild(_planLabel);
+        planRow.AddChild(UiTheme.Button("🗺 Planificar en el mapa…", OpenPlanner, "Punto de partida, personas o focos, tipo de misión y número de vehículos"));
+        Row("Flota y mapa", planRow);
+        _planRowLabel = (Label)planRow.GetParent().GetChild(planRow.GetIndex() - 1);
+        _planRow = planRow;
         var style = new OptionButton { TooltipText = "Táctico: estética de HUD de anime de mechas (biseles, letra condensada, naranjo/verde/rojo, barras segmentadas). Clásico: azul y ámbar." };
         style.AddItem("Táctico (naranjo, biselado)");
         style.AddItem("Clásico (azul, redondeado)");
@@ -154,9 +167,9 @@ public partial class ConfigScreen : CanvasLayer
         bottom.AddThemeConstantOverride("separation", 8);
         _fixBtn = UiTheme.Button("Cambiar a modo sonda", () =>
         {
-            if (_control.Selected == 2)
+            if (_control.Selected >= 2)
             {
-                // rescate: helicóptero en la Tierra
+                // rescate e incendio: helicóptero en la Tierra
                 _planet.Selected = PlanetProfile.All.FindIndex(p => p.Id == "tierra");
                 _mode.Selected = 2;
             }
@@ -288,8 +301,74 @@ public partial class ConfigScreen : CanvasLayer
         Refresh();
     }
 
+    private MissionPlanner.Result _plan = new();
+    private string _planKey = "";
+    private Label _planLabel = null!, _planRowLabel = null!;
+    private HBoxContainer _planRow = null!;
+    private Control? _plannerOverlay;
+
+    /// <summary>Clave del mapa: el plan (celdas) solo vale para el mismo terreno, semilla y dificultad.</summary>
+    private string PlanKey => $"{PlanetProfile.All[_planet.Selected].Id}|{SelectedScenario?.Id}|{(int)_seed.Value}|{_diff.Selected}";
+    private bool PlanValid => _planKey == PlanKey;
+
+    /// <summary>Captura automática: abre el planificador con puntos dados ("x,y;x,y") y flota.</summary>
+    public void OpenPlannerForTest(bool fire, string points, int helis, int trucks)
+    {
+        _control.Selected = fire ? 3 : 2;
+        _plan.Helis = helis;
+        _plan.Trucks = trucks;
+        _plan.Points.Clear();
+        foreach (var p in points.Split(';', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var xy = p.Split(',');
+            if (xy.Length == 2) _plan.Points.Add(new AresX.Core.Cell(int.Parse(xy[0]), int.Parse(xy[1])));
+        }
+        _planKey = PlanKey;
+        Refresh();
+        OpenPlanner();
+    }
+
+    private void OpenPlanner()
+    {
+        // rescate / incendio requieren helicóptero en la Tierra
+        if (_control.Selected < 2) _control.Selected = 2;
+        if (PlanetProfile.All[_planet.Selected].Style != TerrainStyle.Tierra || _mode.Selected != 2)
+        {
+            _planet.Selected = PlanetProfile.All.FindIndex(p => p.Id == "tierra");
+            _mode.Selected = 2;
+            FillMonths();
+        }
+        if (!PlanValid) { _plan.Points.Clear(); _plan.Start = null; }
+        _plan.Mode = _control.Selected == 3 ? MissionMode.Incendio : MissionMode.Rescate;
+        var cfg = Build();
+        _plannerOverlay = new Control { MouseFilter = Control.MouseFilterEnum.Stop };
+        _root.AddChild(_plannerOverlay);
+        Hud.Anchor(_plannerOverlay, 0, 0, 1, 1, 0, 0, 0, 0);
+        var dim = new ColorRect { Color = new Color(0, 0, 0, 0.6f), MouseFilter = Control.MouseFilterEnum.Stop };
+        _plannerOverlay.AddChild(dim);
+        Hud.Anchor(dim, 0, 0, 1, 1, 0, 0, 0, 0);
+        var planner = new MissionPlanner(cfg, _plan, r =>
+        {
+            if (r != null)
+            {
+                _plan = r;
+                _planKey = PlanKey;
+                _control.Selected = r.Mode == MissionMode.Incendio ? 3 : 2;
+            }
+            _plannerOverlay?.QueueFree();
+            _plannerOverlay = null;
+            Refresh();
+        });
+        _plannerOverlay.AddChild(planner);
+        Hud.Anchor(planner, 0.5f, 0.5f, 0.5f, 0.5f, -500, -345, 500, 345);
+    }
+
     private MissionConfig Build() => new()
     {
+        Helis = _plan.Helis,
+        Trucks = _plan.Trucks,
+        StartCell = PlanValid ? _plan.Start : null,
+        Points = PlanValid ? new System.Collections.Generic.List<AresX.Core.Cell>(_plan.Points) : new(),
         PlanetId = PlanetProfile.All[_planet.Selected].Id,
         Probe = _mode.Selected == 1,
         Heli = _mode.Selected == 2,
@@ -301,7 +380,7 @@ public partial class ConfigScreen : CanvasLayer
         UseRna = _rna.ButtonPressed,
         UseFuzzy = _fuzzy.ButtonPressed,
         UseGa = _ga.ButtonPressed,
-        Mode = _control.Selected switch { 0 => MissionMode.Destino, 1 => MissionMode.Autonomo, _ => MissionMode.Rescate },
+        Mode = _control.Selected switch { 0 => MissionMode.Destino, 1 => MissionMode.Autonomo, 2 => MissionMode.Rescate, _ => MissionMode.Incendio },
         Scenario = PlanetProfile.All[_planet.Selected].Style == TerrainStyle.Tierra && _mode.Selected != 1 ? SelectedScenario : null,
     };
 
@@ -326,6 +405,12 @@ public partial class ConfigScreen : CanvasLayer
         _fixBtn.Visible = err != null && (err.Contains("modo") || err.Contains("Helicóptero"));
         _fixBtn.Text = err != null && err.Contains("Helicóptero") ? "Usar helicóptero en la Tierra" : p.SolidSurface ? "Cambiar a rover de ruedas" : "Cambiar a modo sonda";
         _startBtn.Disabled = err != null || !RnaReady;
+        bool fleetMode = _control.Selected >= 2;
+        _planRow.Visible = _planRowLabel.Visible = fleetMode;
+        if (fleetMode)
+            _planLabel.Text = $"{_plan.Helis} helicóptero(s) · {_plan.Trucks} carro(s) de bomberos · " +
+                              (PlanValid && _plan.Start != null ? "partida elegida" : "partida automática") + " · " +
+                              (PlanValid && _plan.Points.Count > 0 ? $"{_plan.Points.Count} {(_control.Selected == 3 ? "focos" : "personas")} en el mapa" : "puntos al azar");
         _startBtn.Text = !RnaReady ? "  Entrenando RNA…  " : "  VALIDAR E INICIAR MISIÓN  ";
         string gas = p.SolidSurface
             ? $"O₂ {p.O2Pct:0.###} % · CO₂ {p.CO2Pct:0.###} % · N₂ {p.N2Pct:0.#} % · SO₂ {p.SO2Ppm:0} ppm"

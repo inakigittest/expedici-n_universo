@@ -220,6 +220,9 @@ public partial class Hud : CanvasLayer
         WindowManager.HintLayer = _root;
 
         // panel vertical "IA en vivo" (figuras de los laboratorios) y ficha flotante del vehículo
+        _pFleet = MakeWindow("flota", "FLOTA", new Rect2(6, 32, 300, 300), out var fleetBox);
+        FleetInfo = new FleetPanel { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+        fleetBox.AddChild(Scroll(FleetInfo));
         _pIa = MakeWindow("ia", "IA EN VIVO", new Rect2(1000, 32, 250, 440), out var iaBox);
         Ia = new IaPanel { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill, OpenWindow = id => Host.ToggleWindow(id) };
         iaBox.AddChild(Scroll(Ia));
@@ -249,6 +252,15 @@ public partial class Hud : CanvasLayer
     private PanelContainer _pTele = null!, _pDec = null!, _pLog = null!, _pCtl = null!, _pMap = null!;
     public LiveStrip Strip = null!;
     public IaPanel Ia = null!;
+    public FleetPanel FleetInfo = null!;
+    private FloatPanel _pFleet = null!;
+
+    /// <summary>La ventana FLOTA se abre sola en las misiones con varios vehículos o de incendio.</summary>
+    private void ApplyFleetWindow()
+    {
+        bool want = Mission != null && (Mission.Fleet.Count > 0 || Mission.FireMode);
+        if (!Platform.IsMobile && _pFleet.Visible != want) _pFleet.SetOpen(want);
+    }
     public CockpitHud Cockpit = null!;
     private Button? _camBtn, _camBtnM;
 
@@ -497,6 +509,7 @@ public partial class Hud : CanvasLayer
         if (_layoutDone || Platform.IsMobile) return;
         _layoutDone = true;
         WindowManager.Load(_root.Size);
+        ApplyFleetWindow();
         _root.Resized += () => WindowManager.OnResized(_root.Size);
         RefreshWindowButtons();
     }
@@ -596,6 +609,7 @@ public partial class Hud : CanvasLayer
         {
             ("ia", "IA en vivo", "RNA, difuso, AG y supervisor en un panel vertical (clic en una figura = laboratorio completo)"),
             ("card", "Ficha", "Ficha flotante que sigue al vehículo: decisión, batería, temperatura, viento"),
+            ("flota", "Flota", "Vehículos de la misión (helicópteros y carros de bomberos), focos de incendio y radio"),
             ("tele", "Telemetría", "Sensores con ruido y validación"), ("dec", "Decisión", "Detalle: RNA → difuso + AG → supervisor"),
             ("log", "Bitácora", "Historial de decisiones"), ("map", "Mapa 2D", "Creencia / verdad"),
             ("lab_policies", "Políticas", "20 semillas × ablaciones"), ("lab_help", "Ayuda", "Controles, leyenda y supuestos (H)"),
@@ -637,6 +651,8 @@ public partial class Hud : CanvasLayer
         Ia.Mission = m;
         Card.Mission = m;
         Cockpit.Mission = m;
+        FleetInfo.Mission = m;
+        ApplyFleetWindow();
         Map.Mission = m;
         Sparks.Mission = m;
         Sparks.Clear();
@@ -731,7 +747,9 @@ public partial class Hud : CanvasLayer
         else
         {
             string plan = m.Plan == null ? "plan: retorno al refugio" : $"plan: {string.Join("→", m.Plan.Order.Where(s => !s.Visited).Select(s => s.Name).DefaultIfEmpty("—"))}→refugio";
-            _objective.Text = m.Rescue
+            _objective.Text = m.FireMode
+                ? $"INCENDIO → {m.TargetName} · {m.Fires.Count} focos · {m.Burning.Count * m.Map.CellM * m.Map.CellM / 10000f:0.0} ha en llamas · {m.BurnedHa:0.0} ha quemadas · balde {m.MainWaterL:0} L · flota {m.FleetSize}"
+                : m.Rescue
                 ? $"RESCATE → {m.TargetName} · plan: {string.Join("→", m.RescueOrder.Select(o => o is Victim v ? v.Name : ((MedicalPoint)o).Name.Replace("Puesto médico (base)", "base")))} · salvadas {m.Saved}/{m.Victims.Count} · a bordo {m.OnBoard}/{m.Capacity}"
                 : $"OBJETIVO: {m.TargetName} {m.Target} · {plan} · muestras {m.Samples}/{m.Map.Sites.Count} · bodega {m.Rover.SampleKg:0.0}/{m.Rover.SampleCapKg:0} kg";
         }

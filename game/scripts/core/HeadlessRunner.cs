@@ -99,7 +99,19 @@ public static class HeadlessRunner
             var swGen = System.Diagnostics.Stopwatch.StartNew();
             var sc = scId != null ? Scenarios.Load(scId) : null;
             double loadMs = swGen.Elapsed.TotalMilliseconds;
-            var m = new Mission(new MissionConfig { Mode = args.Contains("--rescate") ? MissionMode.Rescate : MissionMode.Autonomo, PlanetId = sc != null ? "tierra" : planet, Probe = sc == null && !p.SolidSurface, Seed = seed, MaxSteps = args.Contains("--rescate") ? 900 : 400, Scenario = sc, Heli = args.Contains("--heli") }, rna);
+            var dcfg = new MissionConfig
+            {
+                Mode = args.Contains("--rescate") ? MissionMode.Rescate : args.Contains("--incendio") ? MissionMode.Incendio : MissionMode.Autonomo,
+                PlanetId = sc != null ? "tierra" : planet, Probe = sc == null && !p.SolidSurface, Seed = seed,
+                MaxSteps = args.Contains("--rescate") || args.Contains("--incendio") ? 900 : 400, Scenario = sc, Heli = args.Contains("--heli"),
+                Helis = args.FirstOrDefault(a => a.StartsWith("--helis="))?[8..].ToInt() ?? 1, Trucks = args.FirstOrDefault(a => a.StartsWith("--trucks="))?[9..].ToInt() ?? 0,
+            };
+            if (args.FirstOrDefault(a => a.StartsWith("--start=")) is string st0) { var xy = st0[8..].Split(','); dcfg.StartCell = new Cell(xy[0].ToInt(), xy[1].ToInt()); }
+            if (args.FirstOrDefault(a => a.StartsWith("--points=")) is string pt0)
+                foreach (var pp in pt0[9..].Split(';', StringSplitOptions.RemoveEmptyEntries)) { var xy = pp.Split(','); dcfg.Points.Add(new Cell(xy[0].ToInt(), xy[1].ToInt())); }
+            var m = new Mission(dcfg, rna);
+            if (dcfg.StartCell != null || dcfg.Points.Count > 0)
+                GD.Print($"[Diag] plan del operador: base {m.Map.Start} · " + (m.Rescue ? string.Join(", ", m.Victims.Select(v => $"{v.Name} {v.Cell} {Victim.KindName(v.Kind)}")) : $"{m.Burning.Count} celdas en llamas en {m.Fires.Count} focos"));
             double genMs = swGen.Elapsed.TotalMilliseconds - loadMs;
             var stepMs = new System.Collections.Generic.List<double>();
             while (!m.Finished)
@@ -107,6 +119,9 @@ public static class HeadlessRunner
                 var sw = System.Diagnostics.Stopwatch.StartNew();
                 m.Step();
                 stepMs.Add(sw.Elapsed.TotalMilliseconds);
+                if (m.FireMode && args.Contains("--fire-log") && m.StepCount % 100 == 0)
+                    GD.Print($"[Fuego] paso {m.StepCount} · t {m.Env.TimeS / 60:0} min · en llamas {m.Burning.Count} celdas · quemadas {m.BurnedHa:0.0} ha · focos {m.Fires.Count} · descargas H-1 {m.FireDrops} · " +
+                             string.Join(" · ", m.Fleet.Select(u => $"{u.Name} {u.Drops} ({u.Status})")) + $" · H-1 {m.Rover.Pos}→{m.Target} {m.TargetName} · {m.LastDecision?.Code} {m.LastDecision?.Action} · ruta {m.Route.Count} idx {m.RouteIdx} · pend {m.PendingSample}");
             }
             if (sc != null)
                 GD.Print($"[Diag] Escenario {sc.Consulta}: {m.Map.N}×{m.Map.N} celdas de {m.Map.CellM} m · carga {loadMs:0} ms · generación {genMs:0} ms · paso medio {stepMs.Average():0.0} ms · p95 {stepMs.OrderBy(x => x).ElementAt((int)(stepMs.Count * 0.95)):0.0} ms · máx {stepMs.Max():0} ms · {stepMs.Count} pasos · {m.Map.Calibration}");
@@ -316,6 +331,20 @@ public static class HeadlessRunner
         while (!rm.Finished) rm.Step();
         Check("Rescate en helicóptero (40e9efb1): AG de rescate, urgencia difusa y hospital", rm.State == MissionState.Exito && rm.Saved >= rm.Victims.Count / 2 && rm.Medical.Count >= 1,
             $"{rm.EndReason} · puntos médicos {rm.Medical.Count} · pasos {rm.StepCount}");
+        // flota: rescate con 2 helicópteros + 1 carro (el AG reparte personas entre vehículos capaces)
+        var fm = new Mission(new MissionConfig { Mode = MissionMode.Rescate, PlanetId = "tierra", Seed = 3, MaxSteps = 900, Heli = true, Helis = 2, Trucks = 1, Scenario = Scenarios.Load("40e9efb1") }, rna);
+        while (!fm.Finished) fm.Step();
+        Check("Flota de rescate (2 helicópteros + 1 carro de bomberos)", fm.State == MissionState.Exito && fm.Saved >= rm.Saved && fm.Fleet.Sum(u => u.Delivered) > 0 && fm.Comms.Count > 0,
+            $"{fm.EndReason}");
+        Check("Carros de bomberos solo con zona urbana", new Mission(new MissionConfig { Mode = MissionMode.Rescate, PlanetId = "tierra", Seed = 3, Heli = true, Trucks = 2 }, rna).Fleet.Count(u => !u.Heli) == 0,
+            "terreno procedural sin ciudad: no se despliegan");
+        // incendio: propagación, prioridad difusa de focos y descargas de la flota (200 pasos)
+        var im = new Mission(new MissionConfig { Mode = MissionMode.Incendio, PlanetId = "tierra", Seed = 3, Heli = true, Helis = 2, Trucks = 1, Scenario = Scenarios.Load("40e9efb1") }, rna);
+        int burn0 = im.Burning.Count;
+        for (int k = 0; k < 300 && !im.Finished; k++) im.Step();
+        Check("Incendio: focos, prioridad difusa y descargas de la flota", burn0 > 0 && im.Fires.Count > 0 && im.FireDrops + im.Fleet.Sum(u => u.Drops) > 0 && im.Fires.All(f => f.Priority is >= 0 and <= 1),
+            $"celdas en llamas al inicio {burn0} · tras 300 pasos {im.Burning.Count} · descargas {im.FireDrops + im.Fleet.Sum(u => u.Drops)} · {im.FireNote}");
+        Check("Incendio solo con helicóptero en la Tierra", new MissionConfig { PlanetId = "tierra", Mode = MissionMode.Incendio }.Validate() != null);
         Check("Misión en escenario 40e9efb1 (30 m/celda)", sm.Samples > 0 && sm.Rover.Collisions == 0, $"{Mission.StateName(sm.State)} · muestras {sm.Samples} · {sm.Metrics()["distancia_m"]} m · {sm.EndReason}");
         GD.Print($"[SelfTest] {(fails == 0 ? "TODO OK" : $"{fails} FALLOS")}");
         return fails == 0 ? 0 : 1;

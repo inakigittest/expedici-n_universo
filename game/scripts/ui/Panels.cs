@@ -663,6 +663,31 @@ public partial class MiniMap : Control
             DrawLine(dp - new Vector2(cp + 2, -cp - 2), dp + new Vector2(cp + 2, -cp - 2), dc, 1.5f);
             DrawCircle(dp, cp * 0.5f + 1.5f, dc);
         }
+        // incendio: celdas en llamas, quemadas y mojadas; estanque portátil
+        if (m.FireMode && m.FireState.Length == map.N * map.N)
+        {
+            int nn = map.N;
+            for (int i = 0; i < m.FireState.Length; i++)
+            {
+                byte st = m.FireState[i];
+                if (st == 0) continue;
+                var fc = st == 1 ? new Color(1f, 0.45f, 0.1f, 0.95f) : st == 2 ? new Color(0.08f, 0.07f, 0.06f, 0.75f) : new Color(0.3f, 0.6f, 1f, 0.35f);
+                DrawRect(new Rect2(i % nn * cp, i / nn * cp, MathF.Max(1, cp), MathF.Max(1, cp)), fc);
+            }
+            if (m.WaterTank is Cell wt) DrawRect(new Rect2(wt.X * cp - 2, wt.Y * cp - 2, cp + 4, cp + 4), new Color("5ab0ff"), false, 1.5f);
+            foreach (var fc2 in m.Fires.Take(6)) Gfx.Text(this, Ctr(fc2.Front) + new Vector2(3, -12), fc2.Name, 9, new Color("ffb08a"));
+        }
+        // flota: helicópteros (rombo celeste) y carros (cuadro naranjo) con su nombre
+        foreach (var u in m.Fleet)
+        {
+            var up = Ctr(u.Pos);
+            var uc = u.Heli ? new Color("8fd8ff") : new Color("ff8a3a");
+            float s = cp + 2;
+            if (u.Heli) DrawColoredPolygon(new[] { up + new Vector2(0, -s), up + new Vector2(s, 0), up + new Vector2(0, s), up + new Vector2(-s, 0) }, uc);
+            else DrawRect(new Rect2(up - new Vector2(s, s) * 0.8f, new Vector2(s, s) * 1.6f), uc);
+            Gfx.Text(this, up + new Vector2(s + 2, -7), u.Name, 9, uc);
+            if (u.Goal != null) DrawLine(up, Ctr(u.GoalCell), new Color(uc, 0.45f), 1);
+        }
         if (Hover is Cell h) DrawRect(new Rect2(h.X * cp, h.Y * cp, cp, cp), Colors.White, false, 1);
         Gfx.Text(this, new Vector2(2, map.N * cp - 13), Truth ? "VERDAD (simulador)" : "CREENCIA del rover", 9, Truth ? new Color("8ab0ff") : UiTheme.Dim);
     }

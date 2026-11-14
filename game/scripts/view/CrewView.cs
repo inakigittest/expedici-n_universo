@@ -54,6 +54,9 @@ public partial class CrewView : Node3D
     public Mission? Mission;
     public RescueView? Rescue;
     public RobotView? Vehicle;
+    /// <summary>Tripulación de un helicóptero de apoyo: su altura (la del H-1 sale de la misión) y sin pilotos en los refugios.</summary>
+    public Func<float>? AglFn;
+    public bool Primary = true;
     /// <summary>Lo que hace la tripulación ahora (vacío si está a bordo): lo muestran la ficha y el HUD de cabina.</summary>
     public static string Task = "";
 
@@ -74,9 +77,10 @@ public partial class CrewView : Node3D
 
     public override void _Ready()
     {
-        Task = "";
+        if (Primary) Task = "";
         var m = Mission;
         if (m == null) return;
+        if (!Primary) goto actors;
         // dos pilotos conversando en cada refugio (base y estación)
         int k = 0;
         foreach (var r in m.Map.Refuges)
@@ -93,6 +97,7 @@ public partial class CrewView : Node3D
                 _idle.Add(p);
             }
         }
+        actors:
         _pilot = new PilotActor { Paint = "player", Visible = false };
         AddChild(_pilot);
         _rope = new MeshInstance3D
@@ -105,10 +110,11 @@ public partial class CrewView : Node3D
     }
 
     // ------------------------------------------------------------------ geometría de la salida
-    private bool Hovering => Mission is { Heli: true } m && m.HeliAglM > 0.5f;
+    private bool IsHeli => AglFn != null || Mission?.Heli == true;
+    private bool Hovering => AglFn != null ? AglFn() > 0.5f : Mission is { Heli: true } m && m.HeliAglM > 0.5f;
     private Vector3 Ground(Vector3 p) => new(p.X, Grid.HeightAt(p.X, p.Z), p.Z);
     private Vector3 Side => Vehicle == null ? Vector3.Right : new Vector3(-Vehicle.Facing.Z, 0, Vehicle.Facing.X);
-    private Vector3 Door => Vehicle == null ? Vector3.Zero : Ground(Vehicle.GlobalPosition + Side * (Mission?.Heli == true ? 0.9f : 0.7f));
+    private Vector3 Door => Vehicle == null ? Vector3.Zero : Ground(Vehicle.GlobalPosition + Side * (IsHeli ? 0.9f : 0.7f));
     private Vector3 HoistTop => Vehicle == null ? Vector3.Zero : Vehicle.BodyPosition - Vector3.Up * 0.5f;
     private Vector3 HoistGround => Vehicle == null ? Vector3.Zero : Ground(Vehicle.GlobalPosition);
 
@@ -118,7 +124,7 @@ public partial class CrewView : Node3D
     private void Begin(string task)
     {
         if (_pilot == null || Vehicle == null) return;
-        Task = task;
+        if (Primary) Task = task;
         _leg = 0;
         _legT = 0;
         _pilot.Visible = false;
@@ -132,7 +138,7 @@ public partial class CrewView : Node3D
             _legs.Add(new Leg(LegKind.Rope, HoistTop, HoistGround, 1.1f * k, "climb", escortRides));
             return HoistGround;
         }
-        if (Mission?.Heli == true) _legs.Add(new Leg(LegKind.WaitLanding, Door, Door, 3f, "idle", false));
+        if (IsHeli) _legs.Add(new Leg(LegKind.WaitLanding, Door, Door, 3f, "idle", false));
         return Door;
     }
 
@@ -286,7 +292,7 @@ public partial class CrewView : Node3D
     private void Finish()
     {
         _leg = -1;
-        Task = "";
+        if (Primary) Task = "";
         if (_pilot != null) _pilot.Visible = false;
         _rope.Visible = false;
         foreach (var e in _escort)

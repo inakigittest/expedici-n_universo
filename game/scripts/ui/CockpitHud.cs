@@ -42,7 +42,7 @@ public partial class CockpitHud : Control
 
     public override void _Process(double delta)
     {
-        Visible = Mode != CamMode.Tactica && Mission != null;
+        Visible = Mission != null;
         if (!Visible) return;
         float dt = (float)delta;
         _t += dt;
@@ -130,14 +130,14 @@ public partial class CockpitHud : Control
 
         if (full) DrawFrame(a);
         DrawMarkers(m, cam, a);
-        if (Mode != CamMode.Libre) DrawHeadingTape(m, cam, a, hdg);
+        if (Mode is CamMode.Sobre or CamMode.Cabina) DrawHeadingTape(m, cam, a, hdg);
         if (full)
         {
             DrawReticle(cam, a);
             DrawTapes(m, a);
             DrawMonitor(m, a);
-            DrawSystems(m, a);
         }
+        if (full || Mode == CamMode.Tactica) DrawSystems(m, a);
         if (Mode != CamMode.Libre) DrawDecision(m, a, full);
         DrawAlerts(m, a);
     }
@@ -305,6 +305,12 @@ public partial class CockpitHud : Control
             }
             foreach (var mp in m.Medical) Marker(cam, a, Grid.CellCenter(mp.Cell) + Vector3.Up * 1.5f, new Color("ff6a60"), "✚ " + mp.Name, 2);
         }
+        if (m.FireMode)
+        {
+            foreach (var f in m.Fires.Take(6))
+                Marker(cam, a, Grid.CellCenter(f.Front) + Vector3.Up * 2f, f.Priority > 0.66f ? R : Amber, $"{f.Name} · {f.AreaHa:0.0} ha · prioridad {f.Priority:0.00}", 0);
+            if (m.WaterTank is Cell wt) Marker(cam, a, Grid.CellCenter(wt) + Vector3.Up * 1.5f, new Color("5ab0ff"), "estanque portátil", 2);
+        }
         if (TargetCell(m) is Cell t)
         {
             var wp = Grid.CellCenter(t) + Vector3.Up * 1.5f;
@@ -439,6 +445,7 @@ public partial class CockpitHud : Control
         float wind = m.Planet.AirDensity > 0 ? m.Env.WindGust / MathF.Max(1, m.WindLimitMs) : 0;
         Seg("VIENTO", wind, m.Planet.AirDensity > 0 ? $"{m.Env.WindGust:0}/{m.WindLimitMs:0}" : "—", wind > 1 ? R : wind > 0.75f ? Amber : G);
         if (m.Rescue) Seg("A BORDO", m.OnBoard / (float)m.Capacity, $"{m.OnBoard}/{m.Capacity}", m.OnBoard >= m.Capacity ? Amber : G);
+        if (m.FireMode) Seg("BALDE", m.MainWaterL / 1000f, $"{m.MainWaterL:0} L", m.MainWaterL > 0 ? new Color("5ab0ff") : Amber);
         // tripulación
         bool outside = CrewView.Task != "";
         var crewCol = outside ? (MathF.Sin(_t * 7f) > 0 ? Amber : O) : new Color(G, 0.8f);

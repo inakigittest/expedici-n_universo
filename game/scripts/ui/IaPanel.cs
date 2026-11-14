@@ -67,7 +67,7 @@ public partial class IaPanel : Control
         return y;
     }
 
-    private float RescueH => Mission?.Rescue == true ? 26 + Mission.Victims.Count * 16 : 0;
+    private float RescueH => Mission?.Rescue == true ? 26 + Mission.Victims.Count * 16 : Mission?.FireMode == true ? 30 + Math.Min(6, Mission.Fires.Count) * 15 + 6 * 12 : 0;
 
     public override void _Process(double delta)
     {
@@ -182,6 +182,39 @@ public partial class IaPanel : Control
             y0 += sh;
         }
         if (m.Rescue) DrawRescue(m, y0, w);
+        if (m.FireMode) DrawFire(m, y0, w);
+    }
+
+    /// <summary>Incendio: focos con su prioridad difusa y fuerza de las reglas F1–F6 del último cálculo.</summary>
+    private void DrawFire(Mission m, float y0, float w)
+    {
+        var col = new Color("ff6a3a");
+        float h = RescueH;
+        DrawRect(new Rect2(2, y0 + 2, w - 4, h - 4), new Color(col, 0.06f));
+        DrawRect(new Rect2(2, y0 + 2, 3, h - 4), col);
+        Icons.Draw(this, "warn", new Vector2(16, y0 + 12), 14, col);
+        Gfx.Text(this, new Vector2(28, y0 + 4), $"INCENDIO · {m.Fires.Count} focos · {m.BurnedHa:0.0} ha", 10, col, w - 32);
+        float y = y0 + 24;
+        foreach (var f in m.Fires.Take(6))
+        {
+            var pc = f.Priority > 0.66f ? UiTheme.Crit : f.Priority > 0.4f ? UiTheme.Warn : UiTheme.Ok;
+            Gfx.Text(this, new Vector2(12, y - 1), f.Name, 10, UiTheme.Text);
+            Gfx.Bar(this, new Rect2(36, y + 3, w - 36 - 50, 7), f.Priority, pc);
+            Gfx.Text(this, new Vector2(0, y - 1), $"{f.Priority:0.00}", 9, Colors.White, w - 10, HorizontalAlignment.Right);
+            y += 15;
+        }
+        var fz = m.LastFirePriority;
+        if (fz == null) return;
+        y += 4;
+        foreach (var rule in m.FireRules)
+        {
+            float st = 0;
+            foreach (var fr in fz.Fired) if (fr.Rule == rule) { st = fr.Strength; break; }
+            Gfx.Text(this, new Vector2(12, y - 2), rule.Id, 8, st > 0 ? UiTheme.Text : UiTheme.Dim);
+            Gfx.Bar(this, new Rect2(32, y + 2, 40, 5), st, UiTheme.Fuzzy);
+            Gfx.Text(this, new Vector2(78, y - 2), rule.Text, 8, st > 0 ? UiTheme.Fuzzy : UiTheme.Dim, w - 84);
+            y += 12;
+        }
     }
 
     // ------------------------------------------------------------------ RNA

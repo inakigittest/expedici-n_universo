@@ -133,6 +133,47 @@ archivos. También se puede **arrastrar el PDF a la ventana**.
   H-04 visibilidad < 1500 m. Además S-10 aplica a ráfagas > 15 m/s.
 - Supuestos: 300 kg, rotor de 6,4 m, crucero de 25 m/s a 90 m sobre el terreno y 20 kWh embarcados.
 
+## Rescate e incendio con flota (solo Tierra, helicóptero)
+
+- **Flota:** el helicóptero principal **H-1** lleva la IA híbrida completa (RNA + difuso + AG + supervisor). Se suman
+  hasta 3 helicópteros de apoyo (H-2…) y hasta 4 **carros de bomberos** (B-1…, 6 bomberos cada uno).
+  - Helicópteros de apoyo: vuelan directo a 90 m con las mismas limitaciones (lluvia, ráfagas, visibilidad y margen de
+    potencia por densidad del aire). Llevan 4 personas o un balde de 1 000 L.
+  - Carros: **solo por calles y zona urbana** (pendiente < 12°). Los bomberos caminan hasta 60 m desde el carro.
+    Llevan 3 personas o atacan el fuego con mangueras (estanque de 3 000 L, recarga en grifos de la red urbana).
+    Si el escenario no tiene zona urbana, no se despliegan.
+  - Los vehículos se comunican por radio: avisos en la bitácora y líneas animadas entre ellos en 3D.
+- **Rescate:** el AG pasa a ser **multivehículo**. El cromosoma es el orden de las personas más qué vehículo va por cada
+  una, y solo asigna a vehículos capaces de llegar. Cada vehículo va al hospital al llenarse; la supervivencia baja con
+  la exposición.
+  - En 4 escenarios de montaña y 2 semillas: 1 helicóptero salvó 36 de 54 personas; 2 helicópteros y 1 carro, 49 de 54.
+    Las restantes eran inalcanzables para cualquier vehículo.
+  - El límite de pasos escala con el mapa (antes cortaba misiones largas en mapas de km).
+- **Combate contra incendio:** autómata celular de propagación.
+  - Combustible por cobertura: bosque, matorral, pastizal, cultivo y casas.
+  - El fuego avanza más rápido a favor del viento y ladera arriba; la lluvia lo frena.
+  - Cada celda arde de 10 a 25 minutos y queda quemada.
+  - Descargas del helicóptero: apagan 3×3 celdas y mojan el anillo de alrededor (cortafuego). Recargan en agua, en la
+    base o en un **estanque portátil** que se instala en terreno plano a barlovento del foco principal.
+  - Mangueras de los bomberos: hasta 4 celdas por ciclo, a 60 m del carro.
+  - Una **lógica difusa** (reglas F1–F6) prioriza cada foco por la amenaza a la zona poblada, su tamaño y el viento.
+    Cada vehículo va al foco de mayor prioridad / (1 + ETA), sin amontonarse, y conserva su tarea mientras siga vigente.
+  - Éxito: no quedan celdas en llamas. Fracaso: más del 30 % de la vegetación quemada o 8 h sin controlarlo.
+- **Planificador en el mapa** (configuración → Dinámica rescate o incendio → "Planificar en el mapa…"):
+  - Se elige el punto de partida, las personas o focos, el tipo de misión y el número de vehículos.
+  - Capas sobre el mapa: zona urbana en naranjo (carros), sectores sin potencia para el vuelo estacionario en rojo
+    rayado (helicóptero) y agua en azul.
+  - Cada punto indica qué vehículos lo alcanzan.
+- **Interfaz:**
+  - Ventana FLOTA: estado, carga o agua y recorrido de cada vehículo; focos con su prioridad difusa; último mensaje de
+    radio.
+  - Panel IA: sección INCENDIO con las reglas F1–F6.
+  - Mapa 2D: fuego y flota.
+  - HUD táctico: marcadores de focos y del estanque.
+  - Etiquetas 3D con el estado de cada vehículo. Bomberos con mangueras y chorro de agua; cortina de agua en las
+    descargas.
+- Pruebas sin ventana: `--diag=tierra --scenario=<id> --heli --rescate|--incendio --helis=2 --trucks=1 [--fire-log]`.
+
 ## Dron explorador
 
 - Viaja acoplado al rover en la Tierra y en Marte (como Ingenuity). En Mercurio y Venus no hay aire o el ambiente lo
@@ -157,7 +198,8 @@ archivos. También se puede **arrastrar el PDF a la ventana**.
   - Lejos de los bordes, una ventana queda flotante.
 - **Centro libre para el vehículo**, con una **ficha flotante** que lo sigue: decisión (mover, esperar, analizar…),
   batería, temperatura, viento y visibilidad.
-- **Cámaras (C o botón ◉ en CONTROL):**
+- **Cámaras (C o botón ◉ en CONTROL):** todas muestran paneles de información (la táctica: marcadores, decisión,
+  sistemas y alertas).
   - Táctica: la ortográfica 3/4 de siempre.
   - Sobre el vehículo: persecución detrás y por encima; el arrastre central orbita y llega a la vista cenital.
   - Cabina: primera persona tras el parabrisas (o sobre el mástil del rover).

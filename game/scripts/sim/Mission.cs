@@ -12,7 +12,7 @@ namespace AresX.Sim;
 
 public enum MissionState { Configuracion, Exploracion, Alerta, Replanificacion, Refugio, ModoSeguro, Exito, Fracaso }
 
-public enum MissionMode { Destino, Autonomo, Rescate }
+public enum MissionMode { Destino, Autonomo, Rescate, Incendio }
 
 public enum DestVerdict { Viable, Arriesgado, SoloIda, EnergiaInsuficiente, Inalcanzable }
 
@@ -55,6 +55,9 @@ public sealed class MissionConfig
     public GaParams Ga = new();
     public GeoReport? Scenario;           // escenario GeoClick a escala real (solo Tierra)
     public bool Heli;                     // helicóptero no tripulado (solo Tierra)
+    public int Helis = 1, Trucks = 0;     // flota (rescate / incendio): helicópteros y carros de bomberos
+    public Cell? StartCell;               // punto de partida elegido en el mapa (null = automático)
+    public System.Collections.Generic.List<Cell> Points = new();   // personas (rescate) o focos (incendio) elegidos en el mapa
 
     public string AblationName => (UseRna, UseFuzzy, UseGa) switch
     {
@@ -73,6 +76,8 @@ public sealed class MissionConfig
         var p = PlanetProfile.Get(PlanetId);
         if (Mode == MissionMode.Rescate && (p.Style != TerrainStyle.Tierra || !Heli))
             return "La misión de rescate es para el helicóptero en la Tierra (personas atrapadas en montaña, aluviones o inundaciones): elija Modo = Helicóptero.";
+        if (Mode == MissionMode.Incendio && (p.Style != TerrainStyle.Tierra || !Heli))
+            return "El combate contra incendios es en la Tierra y lo lidera un helicóptero (con apoyo de otros helicópteros y carros de bomberos): elija Modo = Helicóptero.";
         if (Heli && p.Style != TerrainStyle.Tierra)
             return "El helicóptero solo opera en la Tierra: necesita una atmósfera densa (en Marte el aire es ~1 % del terrestre).";
         if (!p.SolidSurface && !Probe)
@@ -191,6 +196,7 @@ public sealed partial class Mission
         _rngGa = root.Fork(13);
         _rngPhys = root.Fork(14);
         _rngEvents = root.Fork(15);
+        ApplyStartCell(cfg.StartCell);
         Env = new SimEnvironment(Planet, Map, _rngEnv, cfg.Month);
         Sensors = new SensorSuite(_rngSense);
         Belief = new BeliefMap(Map, root.Fork(16));
@@ -226,6 +232,11 @@ public sealed partial class Mission
         Cost = new CostModel(Belief, Map, Rover);
         InitHeli();
         InitRescue((ulong)cfg.Seed);
+        InitFire((ulong)cfg.Seed);
+        InitFleet();
+        // rescate e incendio: el límite de pasos escala con el mapa (un paso = una celda de vuelo)
+        if (Rescue && cfg.MaxSteps == 900) cfg.MaxSteps = Math.Max(900, Map.N * 14);
+        if (FireMode && cfg.MaxSteps == 900) cfg.MaxSteps = 40000;   // el incendio se limita por tiempo simulado (8 h)
         Trail.Add(Rover.Pos);
         Belief.ConfirmFree(Rover.Pos);
         Target = Map.Start;
@@ -593,7 +604,8 @@ public sealed partial class Mission
         {
             d.Action = RoverAction.Muestrear;
             d.Code = "S-40";
-            d.Reason = !Rescue ? "En el sitio científico: tomar y analizar muestra"
+            d.Reason = FireMode ? (MainWaterL > 0 && !WaterSources.Contains(Rover.Pos) ? "Sobre el foco: descarga de 1 000 L de agua" : "En el punto de agua: cargar el balde")
+                     : !Rescue ? "En el sitio científico: tomar y analizar muestra"
                      : Medical.Any(m => m.Cell == Rover.Pos) && OnBoard > 0 ? "En el punto médico: entregar a las personas rescatadas"
                      : "Junto a la persona atrapada: la tripulación la sube a bordo";
             d.Explanation = $"{d.Code} · {d.Reason}";
@@ -607,6 +619,9 @@ public sealed partial class Mission
         }
         Execute(d, proposal, click);
         UpdateVictims(LastStepSeconds);
+        UpdateFleet(LastStepSeconds);
+        UpdateFire(LastStepSeconds);
+        if (FireMode && StepCount - _firePlanStep >= 12) _needMissionPlan = true;   // el fuego cambia: reasignar seguido
         EvaluateDroneDecision();
         UpdateDrone(LastStepSeconds);
 
@@ -690,6 +705,11 @@ public sealed partial class Mission
     private void PlanMission()
     {
         _needMissionPlan = false;
+        if (FireMode)
+        {
+            PlanFire();   // decide si el H-1 cambia de objetivo (solo entonces se recalcula la ruta)
+            return;
+        }
         if (Rescue)
         {
             PlanRescue();
@@ -724,6 +744,11 @@ public sealed partial class Mission
 
     private void ChooseNextTarget()
     {
+        if (FireMode)
+        {
+            _needMissionPlan = true;
+            return;
+        }
         if (Rescue)
         {
             ChooseRescueTarget();
@@ -795,6 +820,12 @@ public sealed partial class Mission
 
     private void HandleNoRoute()
     {
+        if (FireMode)
+        {
+            AddLog("alerta", $"Sin ruta conocida hasta {TargetName}: se reasigna");
+            _needMissionPlan = true;
+            return;
+        }
         if (Rescue)
         {
             var vv = Victims.FirstOrDefault(v => v.Cell == Target && v.Active && !v.OnBoard);
@@ -917,6 +948,10 @@ public sealed partial class Mission
                 if (Rover.Probe) ProbeDrift();
                 break;
             }
+            case RoverAction.Muestrear when FireMode:
+                dt = DoFireAction();
+                if (Heli) driveJ = HeliWaitJ(dt);
+                break;
             case RoverAction.Muestrear when Rescue:
                 dt = DoRescueAction();
                 if (Heli) driveJ = HeliWaitJ(dt);
@@ -955,6 +990,7 @@ public sealed partial class Mission
         if (moved && Rescue && Rover.Pos == Target &&
             (Victims.Any(v => v.Cell == Rover.Pos && v.Active && !v.OnBoard) || Medical.Any(m => m.Cell == Rover.Pos) && OnBoard > 0))
             PendingSample = true;   // rescatar o entregar en el siguiente paso
+        if (moved && FireMode && Rover.Pos == Target) PendingSample = true;   // descargar o cargar agua
         if (moved && Rover.Pos == Target)
         {
             var site = Map.Sites.FirstOrDefault(x => x.Cell == Rover.Pos && !x.Visited);
@@ -1083,7 +1119,8 @@ public sealed partial class Mission
 
         float solar = Env.SolarIrradiance() * Rover.PanelM2 * Rover.PanelEff * (1 - Rover.PanelDust) * (recharge ? 1.25f : 1f);
         bool atRefuge = Map.Refuges.Contains(Rover.Pos);
-        float charger = (atRefuge ? (Heli ? 9000f : 600f) : 0f) + Rover.RtgW;   // helipuerto: carga rápida
+        // helipuerto: carga rápida; en emergencias (rescate e incendio) repostaje en caliente (~10 min)
+        float charger = (atRefuge ? (Heli ? (Rescue || FireMode ? 60000f : 9000f) : 600f) : 0f) + Rover.RtgW;
         float baseW = safe ? 15f : Rover.BaseW;
         float loadJ = (baseW + heater + cooler) * dt + driveJ;
         float gainJ = (solar + charger) * dt;
@@ -1197,15 +1234,22 @@ public sealed partial class Mission
             }
         }
         bool planDone = Plan == null ? Target == NearestRefuge || Map.Refuges.Contains(Target) : Plan.Order.All(x => x.Visited);
+        if (FireOver(out bool fireOk, out string fireWhy))
+        {
+            State = fireOk ? MissionState.Exito : MissionState.Fracaso;
+            EndReason = fireWhy + (Fleet.Count > 0 ? $" · {FleetSummary()}" : "");
+            AddLog(fireOk ? "ok" : "fallo", $"{(fireOk ? "ÉXITO" : "FRACASO")}: {EndReason}");
+            return;
+        }
         if (Rescue && RescueDone)
         {
             State = Saved > 0 ? MissionState.Exito : MissionState.Fracaso;
             EndReason = $"rescate: {Saved} de {Victims.Count} personas entregadas con vida" + (LostCount > 0 ? $", {LostCount} no sobrevivieron" : "") +
-                        (Victims.Any(v => v.Unreachable) ? $", {Victims.Count(v => v.Unreachable)} inalcanzables" : "");
+                        (Victims.Any(v => v.Unreachable) ? $", {Victims.Count(v => v.Unreachable)} inalcanzables" : "") + (Fleet.Count > 0 ? $" · {FleetSummary()}" : "");
             AddLog(Saved > 0 ? "ok" : "fallo", $"{(Saved > 0 ? "ÉXITO" : "FRACASO")}: {EndReason}");
             return;
         }
-        if (!Config.ClickMode && !Rescue && Map.Refuges.Contains(Rover.Pos) && planDone && Map.Refuges.Contains(Target) && StepCount > 1 && !PendingSample && !Charging)
+        if (!Config.ClickMode && !Rescue && !FireMode && Map.Refuges.Contains(Rover.Pos) && planDone && Map.Refuges.Contains(Target) && StepCount > 1 && !PendingSample && !Charging)
         {
             State = MissionState.Exito;
             int left = Map.Sites.Count(x => !x.Visited);
@@ -1486,6 +1530,10 @@ public sealed partial class Mission
         ["perdidas"] = LostCount,
         ["victimas"] = Victims.Count,
         ["objetivos_dron"] = Drone.ObjectivesFound,
+        ["flota"] = FleetSize,
+        ["hectareas_quemadas"] = MathF.Round(BurnedHa, 2),
+        ["viviendas_perdidas"] = BuildingsLost,
+        ["descargas"] = FireDrops + Fleet.Sum(u => u.Drops),
         ["celdas_dron"] = Drone.CellsScanned,
     };
 

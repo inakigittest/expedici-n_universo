@@ -525,8 +525,10 @@ public static class WindowManager
                 Set("dec", DockSide.Right, 1, 1.8f, true);
                 Set("map", DockSide.Right, 2, 1f, true);
                 break;
-            default:   // conduccion: vehículo al centro; a la derecha la IA en vivo, el control y el mapa
+            default:   // conduccion: vehículo al centro; a la derecha la IA en vivo, el control y el mapa; flota a la izquierda
                 RightW = 300;
+                LeftW = 300;
+                Set("flota", DockSide.Left, 0, 1, true);
                 Set("ia", DockSide.Right, 0, 3.2f, true);
                 Set("ctl", DockSide.Right, 1, 1.3f, true);
                 Set("map", DockSide.Right, 2, 1f, true, true);
@@ -544,7 +546,7 @@ public static class WindowManager
         var cfg = new ConfigFile();
         cfg.SetValue("_dock", "left", LeftW);
         cfg.SetValue("_dock", "right", RightW);
-        cfg.SetValue("_dock", "version", 3);
+        cfg.SetValue("_dock", "version", 4);
         foreach (var (id, p) in Panels)
         {
             cfg.SetValue(id, "rect", p.Side == DockSide.Float && !p.Minimized ? new Rect2(p.Position, p.Size) : p.FloatRect);
@@ -563,7 +565,7 @@ public static class WindowManager
         if (Platform.IsMobile) return false;
         Area = area;
         var cfg = new ConfigFile();
-        if (cfg.Load(LayoutPath) != Error.Ok || (int)cfg.GetValue("_dock", "version", 1) < 3)
+        if (cfg.Load(LayoutPath) != Error.Ok || (int)cfg.GetValue("_dock", "version", 1) < 4)
         {
             ApplyPreset("conduccion", area);
             return false;
