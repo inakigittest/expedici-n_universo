@@ -146,6 +146,10 @@ archivos. También se puede **arrastrar el PDF a la ventana**.
 
 ## Interfaz
 
+- **Estilo táctico (por defecto):** estética inspirada en los HUD de anime de mechas, solo como referencia. Usa
+  negro cálido, naranjo de señal, verde de lectura y rojo de alarma, esquinas biseladas y letra condensada. Las
+  barras de nivel son segmentadas y las cabeceras y ventanas llevan franjas de peligro. El estilo clásico (azul y
+  ámbar) se elige en la configuración, en "Estilo de interfaz", y la elección se guarda.
 - **Acoples izquierdo y derecho:** las ventanas (telemetría, decisión, bitácora, mapa, control y laboratorios) se
   apilan a los lados sin taparse y se reparten el alto. Al minimizar o cerrar una, las demás crecen.
   - Para acoplar o soltar, arrastra el título hasta un borde. El botón ◧/◨/▣ cambia el acople.

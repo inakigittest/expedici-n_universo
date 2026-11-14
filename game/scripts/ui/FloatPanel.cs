@@ -51,7 +51,7 @@ public partial class FloatPanel : PanelContainer
         DefaultRect = FloatRect = defaultRect;
         MouseFilter = MouseFilterEnum.Stop;
         ClipContents = true;
-        AddThemeStyleboxOverride("panel", UiTheme.Box(new Color(0.03f, 0.045f, 0.075f, 0.93f), UiTheme.Border, 6));
+        AddThemeStyleboxOverride("panel", UiTheme.Box(UiTheme.WindowBg, UiTheme.Border, 6));
         var v = new VBoxContainer();
         v.AddThemeConstantOverride("separation", 3);
         AddChild(v);
@@ -62,6 +62,7 @@ public partial class FloatPanel : PanelContainer
         _title.ClipText = true;
         _title.TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis;
         _title.MouseFilter = MouseFilterEnum.Ignore;
+        if (UiTheme.Tactical) _title.AddThemeFontOverride("font", UiTheme.TitleFont);
         _bar.AddChild(_title);
         _dockBtn = SmallButton("▣", "Acoplar: izquierda → derecha → flotante (o arrastre el título a un borde)", CycleDock);
         _minBtn = SmallButton("–", "Minimizar / restaurar (doble clic en el título)", ToggleMinimize);
@@ -77,14 +78,46 @@ public partial class FloatPanel : PanelContainer
         _grip = new Control { CustomMinimumSize = new Vector2(14, 14), MouseFilter = MouseFilterEnum.Stop, MouseDefaultCursorShape = CursorShape.Fdiagsize };
         _grip.Draw += () =>
         {
-            var c = new Color(1, 1, 1, 0.35f);
+            var c = UiTheme.Tactical ? new Color(UiTheme.Accent, 0.6f) : new Color(1, 1, 1, 0.35f);
             for (int k = 0; k < 3; k++) _grip.DrawLine(new Vector2(13, 4 + k * 4), new Vector2(4 + k * 4, 13), c, 1);
         };
         _grip.GuiInput += OnGripInput;
         AddChild(_grip);
         Position = defaultRect.Position;
         Size = defaultRect.Size;
+        Draw += Decorate;
+        UiTheme.StyleChanged += OnStyleChanged;
         WindowManager.Register(this);
+    }
+
+    private void OnStyleChanged()
+    {
+        if (!IsInstanceValid(this)) return;
+        AddThemeStyleboxOverride("panel", UiTheme.Box(UiTheme.WindowBg, UiTheme.Border, 6));
+        if (UiTheme.Tactical) _title.AddThemeFontOverride("font", UiTheme.TitleFont);
+        else _title.RemoveThemeFontOverride("font");
+        _title.AddThemeColorOverride("font_color", UiTheme.Accent);
+        QueueRedraw();
+    }
+
+    /// <summary>Estilo táctico: línea doble bajo el título con una franja de peligro y marcas en las esquinas libres.</summary>
+    private void Decorate()
+    {
+        if (!UiTheme.Tactical) return;
+        var o = UiTheme.Accent;
+        float y = 6 + _bar.Size.Y + 2;
+        if (!Minimized)
+        {
+            DrawLine(new Vector2(6, y), new Vector2(Size.X - 6, y), new Color(o, 0.45f), 1);
+            DrawLine(new Vector2(6, y + 2), new Vector2(MathF.Min(70, Size.X * 0.3f), y + 2), o, 2);
+            Gfx.Hazard(this, new Rect2(Size.X - 40, y - 1, 32, 4), new Color(o, 0.6f));
+        }
+        // marcas en las esquinas sin bisel
+        var k = new Color(o, 0.9f);
+        DrawLine(new Vector2(Size.X - 1, 0), new Vector2(Size.X - 12, 0), k, 2);
+        DrawLine(new Vector2(Size.X - 1, 0), new Vector2(Size.X - 1, 10), k, 2);
+        DrawLine(new Vector2(0, Size.Y - 1), new Vector2(12, Size.Y - 1), k, 2);
+        DrawLine(new Vector2(0, Size.Y - 1), new Vector2(0, Size.Y - 11), k, 2);
     }
 
     private static Button SmallButton(string t, string tip, Action a)

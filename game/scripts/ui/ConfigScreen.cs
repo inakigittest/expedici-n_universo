@@ -34,7 +34,7 @@ public partial class ConfigScreen : CanvasLayer
         _root = new Control { Theme = UiTheme.Get() };
         _root.SetAnchorsPreset(Control.LayoutPreset.FullRect);
         AddChild(_root);
-        var dim = new ColorRect { Color = new Color(0.01f, 0.02f, 0.04f, 0.72f), MouseFilter = Control.MouseFilterEnum.Stop };
+        var dim = new ColorRect { Color = UiTheme.Tactical ? new Color(0.02f, 0.01f, 0.003f, 0.8f) : new Color(0.01f, 0.02f, 0.04f, 0.72f), MouseFilter = Control.MouseFilterEnum.Stop };
         dim.SetAnchorsPreset(Control.LayoutPreset.FullRect);
         _root.AddChild(dim);
         var panel = new PanelContainer();
@@ -43,7 +43,9 @@ public partial class ConfigScreen : CanvasLayer
         var outer = new VBoxContainer();
         outer.AddThemeConstantOverride("separation", 8);
         panel.AddChild(outer);
-        outer.AddChild(UiTheme.Label("EXPEDICIÓN UNIVERSO · exploración planetaria con IA híbrida", 22, Colors.White));
+        var title = UiTheme.Label("EXPEDICIÓN UNIVERSO · exploración planetaria con IA híbrida", 22, UiTheme.Tactical ? UiTheme.Accent : Colors.White);
+        if (UiTheme.Tactical) title.AddThemeFontOverride("font", UiTheme.TitleFont);
+        outer.AddChild(title);
         outer.AddChild(UiTheme.Label("IA híbrida: RNA (VER) + algoritmo genético (ELEGIR) + lógica difusa (AJUSTAR) + supervisor de seguridad · simulación ficticia con parámetros de referencia", 12, UiTheme.Dim));
         var cols = new HBoxContainer { SizeFlagsVertical = Control.SizeFlags.ExpandFill };
         cols.AddThemeConstantOverride("separation", 14);
@@ -115,6 +117,19 @@ public partial class ConfigScreen : CanvasLayer
         _control.AddItem("Misión autónoma (el AG planifica sitios y regreso)");
         _control.AddItem("Rescate en helicóptero (personas atrapadas → hospital)");
         Row("Dinámica", _control);
+        var style = new OptionButton { TooltipText = "Táctico: estética de HUD de anime de mechas (biseles, letra condensada, naranjo/verde/rojo, barras segmentadas). Clásico: azul y ámbar." };
+        style.AddItem("Táctico (naranjo, biselado)");
+        style.AddItem("Clásico (azul, redondeado)");
+        style.Selected = UiTheme.Tactical ? 0 : 1;
+        style.ItemSelected += i =>
+        {
+            UiTheme.SetTactical(i == 0);
+            dim.Color = UiTheme.Tactical ? new Color(0.02f, 0.01f, 0.003f, 0.8f) : new Color(0.01f, 0.02f, 0.04f, 0.72f);
+            title.AddThemeColorOverride("font_color", UiTheme.Tactical ? UiTheme.Accent : Colors.White);
+            if (UiTheme.Tactical) title.AddThemeFontOverride("font", UiTheme.TitleFont); else title.RemoveThemeFontOverride("font");
+            _importMsg.Text = "Estilo aplicado · algunos rótulos fijos cambian al reiniciar el juego";
+        };
+        Row("Estilo de interfaz", style);
 
         // ---- columna de información del planeta y RNA
         var right = new VBoxContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };

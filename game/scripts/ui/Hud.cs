@@ -44,17 +44,33 @@ public partial class TopBar : Control
     public IGameHost? Host;
 
     public override void _Process(double delta) => QueueRedraw();
+    private float _chipX = 268;
 
     public override void _Draw()
     {
-        DrawRect(new Rect2(Vector2.Zero, Size), new Color("0e1a2e"));
-        DrawLine(new Vector2(0, Size.Y - 1), new Vector2(Size.X, Size.Y - 1), UiTheme.Border);
+        DrawRect(new Rect2(Vector2.Zero, Size), UiTheme.BarBg);
         bool compact = Platform.IsMobile;
-        Gfx.Text(this, new Vector2(10, 6), compact ? "EXPEDICIÓN" : "EXPEDICIÓN UNIVERSO", 15, Colors.White);
-        if (!compact) Gfx.Text(this, new Vector2(196, 8), "| CONTROL", 12, UiTheme.Dim);
+        if (UiTheme.Tactical)
+        {
+            // línea doble naranja con franja de peligro a la izquierda y rótulo condensado
+            DrawLine(new Vector2(0, Size.Y - 3), new Vector2(Size.X, Size.Y - 3), new Color(UiTheme.Accent, 0.35f), 1);
+            DrawLine(new Vector2(0, Size.Y - 1), new Vector2(Size.X, Size.Y - 1), UiTheme.Accent, 1.5f);
+            Gfx.Hazard(this, new Rect2(0, 0, 6, Size.Y - 4), new Color(UiTheme.Accent, 0.9f));
+            string brand = compact ? "EXPEDICIÓN" : "EXPEDICIÓN UNIVERSO";
+            DrawString(UiTheme.TitleFont, new Vector2(12, 21), brand, HorizontalAlignment.Left, -1, 16, UiTheme.Accent);
+            float bw = UiTheme.TitleFont.GetStringSize(brand, HorizontalAlignment.Left, -1, 16).X;
+            if (!compact) Gfx.Text(this, new Vector2(20 + bw, 8), "| CONTROL", 12, UiTheme.Dim);
+            _chipX = MathF.Max(compact ? 112 : 268, 20 + bw + (compact ? 6 : Gfx.TextWidth("| CONTROL", 12) + 12));
+        }
+        else
+        {
+            DrawLine(new Vector2(0, Size.Y - 1), new Vector2(Size.X, Size.Y - 1), UiTheme.Border);
+            Gfx.Text(this, new Vector2(10, 6), compact ? "EXPEDICIÓN" : "EXPEDICIÓN UNIVERSO", 15, Colors.White);
+            if (!compact) Gfx.Text(this, new Vector2(196, 8), "| CONTROL", 12, UiTheme.Dim);
+        }
         var m = Mission;
         if (m == null || Host == null) return;
-        float x = compact ? 112 : 268;
+        float x = UiTheme.Tactical ? _chipX : compact ? 112 : 268;
         void Chip(string t, Color c, bool fill = false)
         {
             Gfx.Chip(this, new Vector2(x, 6), t, 11, c, fill);
