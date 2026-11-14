@@ -55,7 +55,7 @@ public sealed class MissionConfig
     public GaParams Ga = new();
     public GeoReport? Scenario;           // escenario GeoClick a escala real (solo Tierra)
     public bool Heli;                     // helicóptero no tripulado (solo Tierra)
-    public int Helis = 1, Trucks = 0;     // flota (rescate / incendio): helicópteros y carros de bomberos
+    public int Helis = 1, Trucks = 1;     // rescate / incendio: H-1 + 1 carro de bomberos (solo si hay zona urbana)
     public Cell? StartCell;               // punto de partida elegido en el mapa (null = automático)
     public System.Collections.Generic.List<Cell> Points = new();   // personas (rescate) o focos (incendio) elegidos en el mapa
 

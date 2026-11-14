@@ -80,7 +80,9 @@ public sealed partial class Mission
     // ------------------------------------------------------------------ preparación
     private void InitFleet()
     {
-        int helis = Math.Clamp(Config.Helis, 1, 4), trucks = Math.Clamp(Config.Trucks, 0, 4);
+        // flota simplificada: el H-1 (IA híbrida completa) y, si hay zona urbana, un carro de bomberos (el código de
+        // helicópteros de apoyo se conserva, pero la misión usa solo uno)
+        int helis = 1, trucks = Math.Clamp(Config.Trucks, 0, 1);
         if (!Heli || !(Rescue || FireMode)) return;
         int id = 1;
         for (int i = 2; i <= helis; i++)

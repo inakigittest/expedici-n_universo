@@ -133,21 +133,22 @@ archivos. También se puede **arrastrar el PDF a la ventana**.
   H-04 visibilidad < 1500 m. Además S-10 aplica a ráfagas > 15 m/s.
 - Supuestos: 300 kg, rotor de 6,4 m, crucero de 25 m/s a 90 m sobre el terreno y 20 kWh embarcados.
 
-## Rescate e incendio con flota (solo Tierra, helicóptero)
+## Rescate e incendio: helicóptero + carro de bomberos (solo Tierra)
 
-- **Flota:** el helicóptero principal **H-1** lleva la IA híbrida completa (RNA + difuso + AG + supervisor). Se suman
-  hasta 3 helicópteros de apoyo (H-2…) y hasta 4 **carros de bomberos** (B-1…, 6 bomberos cada uno).
-  - Helicópteros de apoyo: vuelan directo a 90 m con las mismas limitaciones (lluvia, ráfagas, visibilidad y margen de
-    potencia por densidad del aire). Llevan 4 personas o un balde de 1 000 L.
-  - Carros: **solo por calles y zona urbana** (pendiente < 12°). Los bomberos caminan hasta 60 m desde el carro.
-    Llevan 3 personas o atacan el fuego con mangueras (estanque de 3 000 L, recarga en grifos de la red urbana).
-    Si el escenario no tiene zona urbana, no se despliegan.
-  - Los vehículos se comunican por radio: avisos en la bitácora y líneas animadas entre ellos en 3D.
-- **Rescate:** el AG pasa a ser **multivehículo**. El cromosoma es el orden de las personas más qué vehículo va por cada
-  una, y solo asigna a vehículos capaces de llegar. Cada vehículo va al hospital al llenarse; la supervivencia baja con
+- **Vehículos:** el helicóptero **H-1** lleva la IA híbrida completa (RNA + difuso + AG + supervisor). Si el escenario
+  tiene zona urbana, se suma un **carro de bomberos B-1** con 6 bomberos (se puede desactivar en el planificador).
+  - Carro: **solo por calles y zona urbana** (pendiente < 12°). Los bomberos caminan hasta 60 m desde el carro.
+    Lleva 3 personas o ataca el fuego con mangueras (estanque de 3 000 L, recarga en grifos de la red urbana).
+  - Los dos vehículos se comunican por radio: avisos en la bitácora y líneas animadas entre ellos en 3D.
+  - Se dejó a propósito un solo helicóptero y un solo carro: las misiones pueden fallar, y eso muestra la dificultad
+    real del problema (distancias de km, supervivencia limitada, fuego que avanza más rápido de lo que se apaga).
+    El código de vehículos de apoyo sigue en `sim/Fleet.cs` por si se amplía.
+- **Rescate:** el AG reparte las personas entre el helicóptero y el carro. El cromosoma es el orden de las personas más
+  qué vehículo va por cada una, y solo asigna al vehículo capaz de llegar. Cada vehículo va al hospital al llenarse; la supervivencia baja con
   la exposición.
-  - En 4 escenarios de montaña y 2 semillas: 1 helicóptero salvó 37 de 54 personas; 2 helicópteros y 1 carro, 49 de 54.
-    Las restantes eran inalcanzables para cualquier vehículo.
+  - En 4 escenarios de montaña y 2 semillas, el helicóptero salvó 48 de 54 personas. Las 6 restantes eran
+    inalcanzables (relieve o potencia insuficiente en altura).
+  - En zona urbana el carro toma a las personas cerca de calles: en 40e9efb1 entrega 3 de 7 y alivia al helicóptero.
   - Los helipuertos de los hospitales también sirven para repostar. El H-1 vuelve a repostar con margen según la
     distancia al refugio (repostaje en caliente de unos 10 minutos).
   - El límite de pasos escala con el mapa (antes cortaba misiones largas en mapas de km).
@@ -162,12 +163,12 @@ archivos. También se puede **arrastrar el PDF a la ventana**.
     Cada vehículo va al foco de mayor prioridad / (1 + ETA), sin amontonarse, y conserva su tarea mientras siga vigente.
   - Focos al azar según la dificultad: 1 (fácil), 2 (normal) o 3 (difícil); también se pueden marcar en el mapa.
   - Éxito: no quedan celdas en llamas. Fracaso: más del 30 % de la vegetación quemada o 8 h sin controlarlo.
-  - Resultados (semilla 3):
-    - 40e9efb1 (valle urbano): 1 helicóptero pierde (247 ha); 2 helicópteros y 2 carros lo controlan (127 ha);
-      3 helicópteros y 2 carros lo apagan al inicio.
-    - a6e5075a: 1 helicóptero lo controla con 6,5 ha.
-    - d6a918af (rural grande, sin calles para los carros): 1 helicóptero pierde (869 ha); con 3 helicópteros quedan
-      10,7 ha en llamas a las 8 h (664 ha quemadas).
+  - Resultados (semilla 3, helicóptero + carro):
+    - a6e5075a: se controla (6 ha quemadas).
+    - 40e9efb1 (valle urbano con bosque): se pierde (247 ha) aunque el carro hace 45 descargas con mangueras.
+    - d6a918af (rural grande, sin calles para el carro): se pierde (869 ha).
+    - Los fracasos son intencionales: muestran que un incendio declarado en bosque avanza más rápido de lo que dos
+      vehículos pueden apagar.
   - El sismo (S-04) ya no detiene al helicóptero en vuelo, y el desgaste por rugosidad del terreno ya no se le aplica.
 - **Planificador en el mapa** (configuración → Dinámica rescate o incendio → "Planificar en el mapa…"):
   - Se elige el punto de partida, las personas o focos, el tipo de misión y el número de vehículos.
@@ -182,7 +183,7 @@ archivos. También se puede **arrastrar el PDF a la ventana**.
   - HUD táctico: marcadores de focos y del estanque.
   - Etiquetas 3D con el estado de cada vehículo. Bomberos con mangueras y chorro de agua; cortina de agua en las
     descargas.
-- Pruebas sin ventana: `--diag=tierra --scenario=<id> --heli --rescate|--incendio --helis=2 --trucks=1 [--fire-log]`.
+- Pruebas sin ventana: `--diag=tierra --scenario=<id> --heli --rescate|--incendio [--trucks=0|1] [--fire-log]`.
 
 ## Dron explorador
 

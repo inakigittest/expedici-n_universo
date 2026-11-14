@@ -408,7 +408,7 @@ public partial class ConfigScreen : CanvasLayer
         bool fleetMode = _control.Selected >= 2;
         _planRow.Visible = _planRowLabel.Visible = fleetMode;
         if (fleetMode)
-            _planLabel.Text = $"{_plan.Helis} helicóptero(s) · {_plan.Trucks} carro(s) de bomberos · " +
+            _planLabel.Text = $"helicóptero H-1{(_plan.Trucks > 0 ? " + carro de bomberos (si hay zona urbana)" : " solo")} · " +
                               (PlanValid && _plan.Start != null ? "partida elegida" : "partida automática") + " · " +
                               (PlanValid && _plan.Points.Count > 0 ? $"{_plan.Points.Count} {(_control.Selected == 3 ? "focos" : "personas")} en el mapa" : "puntos al azar");
         _startBtn.Text = !RnaReady ? "  Entrenando RNA…  " : "  VALIDAR E INICIAR MISIÓN  ";

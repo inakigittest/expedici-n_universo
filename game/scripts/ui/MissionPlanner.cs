@@ -23,7 +23,7 @@ public partial class MissionPlanner : PanelContainer
     public sealed class Result
     {
         public MissionMode Mode;
-        public int Helis = 1, Trucks;
+        public int Helis = 1, Trucks = 1;   // helicóptero H-1 + (opcional) 1 carro de bomberos
         public Cell? Start;
         public List<Cell> Points = new();
     }
@@ -39,7 +39,7 @@ public partial class MissionPlanner : PanelContainer
     private float[]? _margin;
     private PlannerCanvas _canvas = null!;
     private OptionButton _type = null!;
-    private SpinBox _helis = null!, _trucks = null!;
+    private CheckBox _trucks = null!;
     private Label _truckNote = null!;
     private RichTextLabel _side = null!;
     private Button _toolStart = null!, _toolPoint = null!;
@@ -72,13 +72,9 @@ public partial class MissionPlanner : PanelContainer
         _type.Selected = _r.Mode == MissionMode.Incendio ? 1 : 0;
         _type.ItemSelected += i => { _r.Mode = i == 1 ? MissionMode.Incendio : MissionMode.Rescate; _r.Points.Clear(); RefreshTools(); };
         top.AddChild(_type);
-        top.AddChild(UiTheme.Label("  Helicópteros", 12, UiTheme.Dim));
-        _helis = new SpinBox { MinValue = 1, MaxValue = 4, Value = _r.Helis, CustomMinimumSize = new Vector2(70, 0) };
-        _helis.ValueChanged += x => { _r.Helis = (int)x; RefreshSide(); };
-        top.AddChild(_helis);
-        top.AddChild(UiTheme.Label("  Carros de bomberos (6 c/u)", 12, UiTheme.Dim));
-        _trucks = new SpinBox { MinValue = 0, MaxValue = 4, Value = _r.Trucks, CustomMinimumSize = new Vector2(70, 0) };
-        _trucks.ValueChanged += x => { _r.Trucks = (int)x; RefreshSide(); };
+        top.AddChild(UiTheme.Label("  Helicóptero H-1", 12, UiTheme.Rna));
+        _trucks = new CheckBox { Text = "+ carro de bomberos B-1 (6 bomberos)", ButtonPressed = _r.Trucks > 0, TooltipText = "Solo opera en zona urbana (calles con pendiente < 12°)" };
+        _trucks.Toggled += on => { _r.Trucks = on ? 1 : 0; RefreshSide(); };
         top.AddChild(_trucks);
         _truckNote = UiTheme.Label("", 11, UiTheme.Dim);
         top.AddChild(_truckNote);
@@ -187,9 +183,9 @@ public partial class MissionPlanner : PanelContainer
             _sat = ImageTexture.CreateFromImage(bg);
         }
         bool urban = _truck.Any(b => b);
-        _trucks.Editable = urban;
-        if (!urban) { _trucks.Value = 0; _r.Trucks = 0; }
-        _truckNote.Text = urban ? $"zona urbana: {_truck.Count(b => b) * m.CellM * m.CellM / 1e6f:0.0} km² (naranjo)" : "sin zona urbana: los carros no pueden operar aquí";
+        _trucks.Disabled = !urban;
+        if (!urban) { _trucks.ButtonPressed = false; _r.Trucks = 0; }
+        _truckNote.Text = urban ? $"zona urbana: {_truck.Count(b => b) * m.CellM * m.CellM / 1e6f:0.0} km² (naranjo)" : "sin zona urbana: el carro no puede operar aquí";
         _truckNote.AddThemeColorOverride("font_color", urban ? new Color("ff9a4a") : UiTheme.Warn);
     }
 
@@ -217,7 +213,7 @@ public partial class MissionPlanner : PanelContainer
         var m = _map;
         bool fire = _r.Mode == MissionMode.Incendio;
         var sb = new System.Text.StringBuilder();
-        sb.Append($"[color=#ffd860]{(fire ? "COMBATE CONTRA INCENDIO" : "RESCATE DE PERSONAS")}[/color] · {_r.Helis} helicóptero(s) · {_r.Trucks} carro(s)\n");
+        sb.Append($"[color=#ffd860]{(fire ? "COMBATE CONTRA INCENDIO" : "RESCATE DE PERSONAS")}[/color] · helicóptero H-1{(_r.Trucks > 0 ? " + carro de bomberos B-1" : " solo")}\n");
         sb.Append($"Partida: {(_r.Start is Cell s ? $"({s.X},{s.Y}) · {m.Elevation(s):0} m" : "automática (zona plana más amplia)")}\n");
         sb.Append(_r.Points.Count == 0
             ? $"Puntos: al azar ({(fire ? "focos en vegetación cerca de casas" : "personas en montaña, aluvión, inundación y zona urbana")})\n"
@@ -233,7 +229,7 @@ public partial class MissionPlanner : PanelContainer
         if (_r.Points.Any(c => !Reach(c).Heli && (!Reach(c).Truck || _r.Trucks == 0)))
             sb.Append("[color=#ffb347]⚠ Hay puntos que ningún vehículo de la flota elegida alcanza.[/color]\n");
         if (_r.Trucks > 0 && _r.Points.Count > 0 && !_r.Points.Any(c => Reach(c).Truck))
-            sb.Append("[color=#8a96aa]Los carros solo actúan en zona urbana: con estos puntos quedarán de apoyo en el cuartel.[/color]\n");
+            sb.Append("[color=#8a96aa]El carro solo actúa en zona urbana: con estos puntos quedará de apoyo en el cuartel.[/color]\n");
         sb.Append("\n[color=#8a96aa]Capas: [color=#ff9a4a]naranjo[/color] calles y zona urbana (carros de bomberos, pendiente < 12°) · " +
                   "[color=#ff6a5a]rojo rayado[/color] sin potencia para el vuelo estacionario del helicóptero · [color=#5ab0ff]azul[/color] agua.\n\n" +
                   "Helicóptero: 4 personas o balde de 1 000 L; vuela con lluvia < 8 mm/h, ráfagas < 15 m/s y visibilidad ≥ 1,5 km; aterriza en pendiente < 12° (si no, cabrestante).\n" +

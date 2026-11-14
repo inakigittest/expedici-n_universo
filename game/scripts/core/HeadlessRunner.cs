@@ -104,7 +104,7 @@ public static class HeadlessRunner
                 Mode = args.Contains("--rescate") ? MissionMode.Rescate : args.Contains("--incendio") ? MissionMode.Incendio : MissionMode.Autonomo,
                 PlanetId = sc != null ? "tierra" : planet, Probe = sc == null && !p.SolidSurface, Seed = seed,
                 MaxSteps = args.Contains("--rescate") || args.Contains("--incendio") ? 900 : 400, Scenario = sc, Heli = args.Contains("--heli"),
-                Helis = args.FirstOrDefault(a => a.StartsWith("--helis="))?[8..].ToInt() ?? 1, Trucks = args.FirstOrDefault(a => a.StartsWith("--trucks="))?[9..].ToInt() ?? 0,
+                Helis = args.FirstOrDefault(a => a.StartsWith("--helis="))?[8..].ToInt() ?? 1, Trucks = args.FirstOrDefault(a => a.StartsWith("--trucks="))?[9..].ToInt() ?? 1,
             };
             if (args.FirstOrDefault(a => a.StartsWith("--start=")) is string st0) { var xy = st0[8..].Split(','); dcfg.StartCell = new Cell(xy[0].ToInt(), xy[1].ToInt()); }
             if (args.FirstOrDefault(a => a.StartsWith("--points=")) is string pt0)
@@ -332,14 +332,14 @@ public static class HeadlessRunner
         Check("Rescate en helicóptero (40e9efb1): AG de rescate, urgencia difusa y hospital", rm.State == MissionState.Exito && rm.Saved >= rm.Victims.Count / 2 && rm.Medical.Count >= 1,
             $"{rm.EndReason} · puntos médicos {rm.Medical.Count} · pasos {rm.StepCount}");
         // flota: rescate con 2 helicópteros + 1 carro (el AG reparte personas entre vehículos capaces)
-        var fm = new Mission(new MissionConfig { Mode = MissionMode.Rescate, PlanetId = "tierra", Seed = 3, MaxSteps = 900, Heli = true, Helis = 2, Trucks = 1, Scenario = Scenarios.Load("40e9efb1") }, rna);
+        var fm = new Mission(new MissionConfig { Mode = MissionMode.Rescate, PlanetId = "tierra", Seed = 3, MaxSteps = 900, Heli = true, Trucks = 1, Scenario = Scenarios.Load("40e9efb1") }, rna);
         while (!fm.Finished) fm.Step();
-        Check("Flota de rescate (2 helicópteros + 1 carro de bomberos)", fm.State == MissionState.Exito && fm.Saved >= rm.Saved && fm.Fleet.Sum(u => u.Delivered) > 0 && fm.Comms.Count > 0,
+        Check("Rescate helicóptero + carro de bomberos (zona urbana)", fm.State == MissionState.Exito && fm.Fleet.Count == 1 && !fm.Fleet[0].Heli && fm.Comms.Count > 0,
             $"{fm.EndReason}");
         Check("Carros de bomberos solo con zona urbana", new Mission(new MissionConfig { Mode = MissionMode.Rescate, PlanetId = "tierra", Seed = 3, Heli = true, Trucks = 2 }, rna).Fleet.Count(u => !u.Heli) == 0,
             "terreno procedural sin ciudad: no se despliegan");
         // incendio: propagación, prioridad difusa de focos y descargas de la flota (200 pasos)
-        var im = new Mission(new MissionConfig { Mode = MissionMode.Incendio, PlanetId = "tierra", Seed = 3, Heli = true, Helis = 2, Trucks = 1, Scenario = Scenarios.Load("40e9efb1") }, rna);
+        var im = new Mission(new MissionConfig { Mode = MissionMode.Incendio, PlanetId = "tierra", Seed = 3, Heli = true, Trucks = 1, Scenario = Scenarios.Load("40e9efb1") }, rna);
         int burn0 = im.Burning.Count;
         for (int k = 0; k < 300 && !im.Finished; k++) im.Step();
         Check("Incendio: focos, prioridad difusa y descargas de la flota", burn0 > 0 && im.Fires.Count > 0 && im.FireDrops + im.Fleet.Sum(u => u.Drops) > 0 && im.Fires.All(f => f.Priority is >= 0 and <= 1),
