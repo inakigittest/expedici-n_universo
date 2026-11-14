@@ -125,7 +125,7 @@ public sealed partial class Mission
             var veg = Enumerable.Range(0, n * n).Where(i => Fuel[i] >= 0.6f).ToList();
             var near = veg.Where(i => _urbanDist[i] is > 0.5f and < 3f).ToList();
             var pool = near.Count > 20 ? near : veg;
-            int count = 2 + Config.Difficulty;
+            int count = 1 + Config.Difficulty;
             int spacing = Math.Max(10, n / 10);
             for (int tries = 0; pts.Count < count && tries < 2000 && pool.Count > 0; tries++)
             {
@@ -274,7 +274,7 @@ public sealed partial class Mission
                 float wind = MathF.Exp(0.12f * ws * cosW);
                 float rise = (Map.H[j] - hi) / (len * Map.CellM);
                 float slope = MathF.Exp(Math.Clamp(rise, -0.6f, 0.8f) * 2.2f);
-                float rate = Fuel[j] * FireHeat[i] * wind * slope * rain / (600f * len) * (30f / MathF.Max(10f, Map.CellM));
+                float rate = Fuel[j] * FireHeat[i] * wind * slope * rain / (750f * len) * (30f / MathF.Max(10f, Map.CellM));
                 if (_rngFire.F() < 1f - MathF.Exp(-rate * dt)) newly.Add(j);
             }
         }

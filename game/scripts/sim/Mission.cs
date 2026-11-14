@@ -577,6 +577,15 @@ public sealed partial class Mission
         // --- 4) supervisor
         UpdateRefugeEstimate();
         bool atRefuge = Map.Refuges.Contains(Rover.Pos);
+        // emergencias (rescate e incendio): el H-1 vuelve a repostar con margen según la distancia al refugio
+        if ((Rescue || FireMode) && Heli && !_goingRefuge && !Charging && !atRefuge && RefugeReachable &&
+            Rover.BatteryWh - EnergyToRefuge * 1.3f < Rover.CapacityWh * 0.2f)
+        {
+            _goingRefuge = true;
+            SetTarget(NearestRefuge, "refugio (energía)");
+            _needRoute = true;
+            AddLog("alerta", $"H-1: batería {Rover.BatteryPct:0} % y {EnergyToRefuge:0} Wh para volver · va a repostar a {NearestRefuge} (repostaje en caliente) y luego retoma la misión");
+        }
         float tip = TipIndex(slopeAhead, windPct);
         var si = new SupervisorInput
         {
@@ -1130,7 +1139,8 @@ public sealed partial class Mission
         Rover.BatteryWh = MathX.Clamp(Rover.BatteryWh + (gainJ - loadJ) / 3600f, 0, Rover.CapacityWh);
 
         // desgaste
-        float wear = (moved ? Map.Rough[Map.Idx(Rover.Pos)] * 0.04f * (0.5f + Rover.LastSpeed) : 0) + Env.QuakeAccel * 0.15f;
+        // el helicóptero en vuelo no sufre el desgaste de rodadura del terreno ni los sismos
+        float wear = Heli ? 0f : (moved ? Map.Rough[Map.Idx(Rover.Pos)] * 0.04f * (0.5f + Rover.LastSpeed) : 0) + Env.QuakeAccel * 0.15f;
         Rover.MechWear += wear;
         Rover.Corrosion += p.CorrosionPerStep;
         Rover.Integrity = MathF.Max(0, Rover.Integrity - wear - p.CorrosionPerStep);
@@ -1200,6 +1210,7 @@ public sealed partial class Mission
         foreach (var r in Map.Refuges)
         {
             var path = Cost.Shortest(Rover.Pos, r, 1.5f);
+            if (path == null && Heli) path = LinePath(Rover.Pos, r);   // el helicóptero siempre puede volver en línea recta
             if (path == null) continue;
             float wh = 0, t = 0;
             for (int i = 1; i < path.Count; i++)

@@ -146,8 +146,10 @@ archivos. También se puede **arrastrar el PDF a la ventana**.
 - **Rescate:** el AG pasa a ser **multivehículo**. El cromosoma es el orden de las personas más qué vehículo va por cada
   una, y solo asigna a vehículos capaces de llegar. Cada vehículo va al hospital al llenarse; la supervivencia baja con
   la exposición.
-  - En 4 escenarios de montaña y 2 semillas: 1 helicóptero salvó 36 de 54 personas; 2 helicópteros y 1 carro, 49 de 54.
+  - En 4 escenarios de montaña y 2 semillas: 1 helicóptero salvó 37 de 54 personas; 2 helicópteros y 1 carro, 49 de 54.
     Las restantes eran inalcanzables para cualquier vehículo.
+  - Los helipuertos de los hospitales también sirven para repostar. El H-1 vuelve a repostar con margen según la
+    distancia al refugio (repostaje en caliente de unos 10 minutos).
   - El límite de pasos escala con el mapa (antes cortaba misiones largas en mapas de km).
 - **Combate contra incendio:** autómata celular de propagación.
   - Combustible por cobertura: bosque, matorral, pastizal, cultivo y casas.
@@ -158,7 +160,15 @@ archivos. También se puede **arrastrar el PDF a la ventana**.
   - Mangueras de los bomberos: hasta 4 celdas por ciclo, a 60 m del carro.
   - Una **lógica difusa** (reglas F1–F6) prioriza cada foco por la amenaza a la zona poblada, su tamaño y el viento.
     Cada vehículo va al foco de mayor prioridad / (1 + ETA), sin amontonarse, y conserva su tarea mientras siga vigente.
+  - Focos al azar según la dificultad: 1 (fácil), 2 (normal) o 3 (difícil); también se pueden marcar en el mapa.
   - Éxito: no quedan celdas en llamas. Fracaso: más del 30 % de la vegetación quemada o 8 h sin controlarlo.
+  - Resultados (semilla 3):
+    - 40e9efb1 (valle urbano): 1 helicóptero pierde (247 ha); 2 helicópteros y 2 carros lo controlan (127 ha);
+      3 helicópteros y 2 carros lo apagan al inicio.
+    - a6e5075a: 1 helicóptero lo controla con 6,5 ha.
+    - d6a918af (rural grande, sin calles para los carros): 1 helicóptero pierde (869 ha); con 3 helicópteros quedan
+      10,7 ha en llamas a las 8 h (664 ha quemadas).
+  - El sismo (S-04) ya no detiene al helicóptero en vuelo, y el desgaste por rugosidad del terreno ya no se le aplica.
 - **Planificador en el mapa** (configuración → Dinámica rescate o incendio → "Planificar en el mapa…"):
   - Se elige el punto de partida, las personas o focos, el tipo de misión y el número de vehículos.
   - Capas sobre el mapa: zona urbana en naranjo (carros), sectores sin potencia para el vuelo estacionario en rojo

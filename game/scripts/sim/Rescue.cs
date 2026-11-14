@@ -88,6 +88,8 @@ public sealed partial class Mission
                 if (c is Cell cc) Medical.Add(new MedicalPoint { Name = $"Hospital {Medical.Count + 1}", Cell = cc });
             }
         Medical.Add(new MedicalPoint { Name = "Puesto médico (base)", Cell = Map.Start });
+        // los hospitales tienen helipuerto con combustible: también sirven para recargar (refugio)
+        foreach (var mp in Medical) if (!Map.Refuges.Contains(mp.Cell)) Map.Refuges.Add(mp.Cell);
 
         var rng = _rngRescue;
         int n = Map.N;

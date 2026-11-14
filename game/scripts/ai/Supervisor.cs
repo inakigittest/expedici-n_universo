@@ -107,7 +107,8 @@ public static class SafetySupervisor
         else if (margin < 10) { d.Alert = true; d.SpeedCap = MathF.Min(d.SpeedCap, 0.35f); }
 
         // S-04 sismo / vibración extrema
-        var c4 = Check("S-04", "Sin sismo activo", i.QuakeAccel < 0.9f, $"aceleración {i.QuakeAccel:0.00} m/s²", true);
+        // el helicóptero en vuelo no siente el sismo: la regla aplica solo a vehículos en el suelo
+        var c4 = Check("S-04", "Sin sismo activo", i.Heli || i.QuakeAccel < 0.9f, i.Heli ? "en vuelo: no aplica" : $"aceleración {i.QuakeAccel:0.00} m/s²", true);
         if (!c4.Passed) Set(RoverAction.Esperar, "S-04", "Sismo: frenar, esperar y remedir", c4);
 
         // H-01…H-04: envolvente de vuelo del helicóptero (sustituye a las reglas de rodadura S-06…S-09 y S-13)
