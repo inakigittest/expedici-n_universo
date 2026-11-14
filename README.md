@@ -151,15 +151,24 @@ archivos. También se puede **arrastrar el PDF a la ventana**.
   - Para acoplar o soltar, arrastra el título hasta un borde. El botón ◧/◨/▣ cambia el acople.
   - La esquina inferior ajusta el ancho del acople y la altura relativa de la ventana.
   - Lejos de los bordes, una ventana queda flotante.
-- **Centro libre para el vehículo**, con la **franja de decisión en vivo** debajo: VEHÍCULO → RNA (ver) → DIFUSO
-  (ajustar) → AG (elegir) → SUPERVISOR (decidir), siempre del paso actual.
+- **Centro libre para el vehículo**, con una **ficha flotante** que lo sigue: decisión (mover, esperar, analizar…),
+  batería, temperatura, viento y visibilidad.
+- **IA EN VIVO:** una columna vertical con las figuras de los tres laboratorios y del supervisor, del paso actual
+  (clic en una sección abre su laboratorio completo):
+  - RNA: fila de entrada con el nombre y valor de los 11 rasgos → normalización z → activaciones de la red (las
+    neuronas se encienden en cada paso) → probabilidades → acción posterior del supervisor.
+  - Difuso: curva agregada y centroide, historia de las salidas, y las 16 reglas con su fuerza y la salida crisp
+    (velocidad y cautela) que daría cada una, frente al centroide final.
+  - Genético: fitness por generación y mapa de riesgo con las 5 mejores rutas de cada generación (se reproduce la
+    evolución de cada corrida nueva), más las candidatas A/B/C.
+  - Supervisor: acción, código y una luz por restricción.
 - **CONTROL** es un panel colapsable (solo se minimiza, no se cierra).
 - **Laboratorios en vivo sin pausar la misión.** Si la ventana es angosta (por ejemplo, acoplada), muestran un
   **resumen de indicadores**: probabilidades, métricas de prueba y estado de las creencias (RNA); entradas, reglas
   activas y salidas (difuso); candidatas, desglose del fitness y curva por generación (genético). El botón
   Auto/Resumen/Completa fuerza la vista.
 - **Disposiciones:**
-  - Conducción (por defecto): decisión a la izquierda, control y mapa a la derecha.
+  - Conducción (por defecto): IA en vivo, control y mapa a la derecha.
   - Análisis: los tres laboratorios en resumen.
   - Paneles: telemetría, bitácora, decisión y mapa.
   - Limpia: solo el mundo y la franja.

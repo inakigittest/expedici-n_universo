@@ -494,7 +494,7 @@ public static class WindowManager
                 break;
             default:   // conduccion: vehículo al centro; a la derecha la IA en vivo, el control y el mapa
                 RightW = 300;
-                Set("ia", DockSide.Right, 0, 2.1f, true);
+                Set("ia", DockSide.Right, 0, 3.2f, true);
                 Set("ctl", DockSide.Right, 1, 1.3f, true);
                 Set("map", DockSide.Right, 2, 1f, true, true);
                 break;
