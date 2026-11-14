@@ -56,6 +56,7 @@ public partial class Main : Node3D, IGameHost
             return;
         }
         SetupInput();
+        AddChild(new RadioPlayer { Name = "RadioPlayer" });   // radio de fondo (persiste entre misiones)
         _fx = new EnvironmentFx { Name = "EnvironmentFx" };
         AddChild(_fx);
         _worldRoot = new Node3D { Name = "World" };

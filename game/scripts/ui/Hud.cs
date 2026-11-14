@@ -88,7 +88,19 @@ public partial class TopBar : Control
             Chip($"semilla {m.Config.Seed}", UiTheme.Dim);
             Chip($"{m.Clock}", UiTheme.Dim);
         }
-        Gfx.Text(this, new Vector2(0, 8), $"{(Host.Running ? "▶" : "Ⅱ")} ×{Host.SimSpeed:0}   {Engine.GetFramesPerSecond()} fps", 11, Host.Running ? UiTheme.Ok : UiTheme.Warn, Size.X - 10, HorizontalAlignment.Right);
+        string run = $"{(Host.Running ? "▶" : "Ⅱ")} ×{Host.SimSpeed:0}   {Engine.GetFramesPerSecond()} fps";
+        Gfx.Text(this, new Vector2(0, 8), run, 11, Host.Running ? UiTheme.Ok : UiTheme.Warn, Size.X - 10, HorizontalAlignment.Right);
+        // radio de fondo: lo que suena, entre las fichas y la velocidad
+        if (!compact && Core.RadioPlayer.I is { On: true } radio)
+        {
+            float right = Size.X - 24 - Gfx.TextWidth(run, 11);
+            float w = MathF.Min(300, right - x);
+            if (w > 60)
+            {
+                string t = "♪ " + (radio.NowPlaying != "" ? radio.NowPlaying : System.Text.RegularExpressions.Regex.Replace(radio.Station?.Name ?? "", @"\s+", " ").Trim());
+                Gfx.Text(this, new Vector2(right - w, 8), t, 11, radio.Status == "en el aire" ? UiTheme.Rna : UiTheme.Dim, w, HorizontalAlignment.Right);
+            }
+        }
     }
 }
 
@@ -574,6 +586,9 @@ public partial class Hud : CanvasLayer
         var gd = Grid(2);
         _droneBtn = B(gd, "Desplegar (D)", () => Host.DroneAction(), "Desplegar el dron a la celda bajo el cursor o a la zona más incierta de la ruta (D); en vuelo: ordenar regreso");
         _droneAutoBtn = B(gd, "Auto ✓", () => Host.ToggleDroneAuto(), "Despliegue automático por decisión difusa (conveniencia ≥ 0,60)");
+
+        Header("RADIO · CHILE");
+        v.AddChild(new RadioWidget(true));
 
         Header("VENTANAS");
         var gw = Grid(2);

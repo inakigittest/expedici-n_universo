@@ -45,6 +45,24 @@ public static class HeadlessRunner
             exitCode = same ? 0 : 1;
             return true;
         }
+        if (args.Contains("--radio-test"))
+        {
+            // directorio de radios chilenas + sintonía real de las primeras N (decodifica ~4 s de cada una)
+            int n = args.FirstOrDefault(a => a.StartsWith("--radio-n="))?[10..].ToInt() ?? 6;
+            var list = RadioPlayer.TestDirectory(out string err);
+            GD.Print($"[Radio] directorio: {list.Count} radios chilenas en MP3 {err}");
+            int ok = 0;
+            string? only = args.FirstOrDefault(a => a.StartsWith("--radio-name="))?[13..].ToLowerInvariant();
+            foreach (var st in (only != null ? list.Where(x => x.Name.ToLowerInvariant().Contains(only)) : list).Take(n))
+            {
+                string res = RadioPlayer.TestTune(st.Url, 4f);
+                if (res.StartsWith("OK")) ok++;
+                GD.Print($"[Radio] {st.Name,-28} {res}");
+            }
+            GD.Print($"[Radio] sintonizadas {ok}/{Math.Min(n, list.Count)}");
+            exitCode = ok > 0 ? 0 : 1;
+            return true;
+        }
         if (args.FirstOrDefault(a => a.StartsWith("--import-pdf=")) is string ip)
         {
             // importa uno o varios PDF (separados por ;) y compara con el escenario incluido del mismo informe, si existe

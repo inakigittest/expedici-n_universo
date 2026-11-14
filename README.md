@@ -190,6 +190,20 @@ archivos. También se puede **arrastrar el PDF a la ventana**.
   - Limpia: solo el mundo y la franja.
 - La disposición se guarda entre sesiones. La opacidad de las ventanas se ajusta entre 55 y 100 %.
 
+## Radio de fondo
+
+- Radios de Chile por internet. La lista sale de Radio Browser, un directorio abierto y comunitario; el juego solo
+  pide las radios de Chile en MP3 y no envía datos del usuario. La lista queda en caché para arrancar sin conexión.
+- Se elige en la configuración ("Radio de fondo") o en el panel CONTROL (sección RADIO · CHILE): encender o
+  apagar, lista, anterior o siguiente y volumen. En la barra superior se ve lo que suena cuando la radio informa
+  el título de la canción.
+- Se decodifica con NLayer (MP3 en C# puro, licencia MIT), así que funciona igual en Windows y Android. Las radios
+  que transmiten solo en AAC no aparecen.
+- Consume cerca de 1 MB por minuto a 128 kbps. En Android se detiene al pasar el juego a segundo plano.
+- La radio, el volumen y si está encendida se guardan en `user://ajustes.cfg`.
+- Prueba sin ventana: `--radio-test [--radio-n=12] [--radio-name=texto]` sintoniza radios reales y decodifica unos
+  segundos de cada una.
+
 ## Controles
 
 | Tecla | Acción |

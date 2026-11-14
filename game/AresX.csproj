@@ -11,5 +11,7 @@
   <ItemGroup>
     <!-- Lector de PDF (Apache 2.0): importar informes GeoClick como escenarios dentro del juego -->
     <PackageReference Include="PdfPig" Version="0.1.9" />
+    <!-- Decodificador MP3 en C# puro (MIT): radio de fondo por streaming, también en Android -->
+    <PackageReference Include="NLayer" Version="1.16.0" />
   </ItemGroup>
 </Project>

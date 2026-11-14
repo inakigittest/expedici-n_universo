@@ -130,6 +130,7 @@ public partial class ConfigScreen : CanvasLayer
             _importMsg.Text = "Estilo aplicado · algunos rótulos fijos cambian al reiniciar el juego";
         };
         Row("Estilo de interfaz", style);
+        Row("Radio de fondo", new RadioWidget(false));
 
         // ---- columna de información del planeta y RNA
         var right = new VBoxContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
