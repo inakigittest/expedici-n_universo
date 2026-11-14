@@ -153,6 +153,18 @@ archivos. También se puede **arrastrar el PDF a la ventana**.
   - Lejos de los bordes, una ventana queda flotante.
 - **Centro libre para el vehículo**, con una **ficha flotante** que lo sigue: decisión (mover, esperar, analizar…),
   batería, temperatura, viento y visibilidad.
+- **Cámaras (C o botón ◉ en CONTROL):**
+  - Táctica: la ortográfica 3/4 de siempre.
+  - Sobre el vehículo: persecución detrás y por encima; el arrastre central orbita y llega a la vista cenital.
+  - Cabina: primera persona tras el parabrisas (o sobre el mástil del rover).
+  - Libre: vuelo libre por el mapa (en el teléfono se omite).
+- **HUD táctico de cabina** (estética propia inspirada en HUD de anime de mechas): cinta de rumbo con el objetivo,
+  cintas de velocidad y altura, retícula con horizonte, marcadores de objetivo, ruta, personas y puntos médicos,
+  monitor IA con tres ondas (RNA, difuso, AG), decisión con una celda hexagonal por restricción del supervisor,
+  sistemas en barras segmentadas y franja de peligro ante un veto. En la persecución se ve una versión reducida.
+- **Tripulación:** al muestrear, rescatar o entregar, un piloto baja (o desciende por cable si el helicóptero está en
+  vuelo estacionario), va hasta el punto o la persona y vuelven juntos. El vehículo espera a que el piloto vuelva a
+  subir; las personas entregadas quedan junto al punto médico.
 - **IA EN VIVO:** una columna vertical con las figuras de los tres laboratorios y del supervisor, del paso actual
   (clic en una sección abre su laboratorio completo):
   - RNA: fila de entrada con el nombre y valor de los 11 rasgos → normalización z → activaciones de la red (las
@@ -184,8 +196,10 @@ archivos. También se puede **arrastrar el PDF a la ventana**.
 | Mayús / Ctrl / Alt + clic | agregar barranco (el rover no lo sabe hasta percibirlo) / roca / despejar |
 | M | destino por clic ↔ misión autónoma |
 | 1–4 | velocidad ×1 ×2 ×4 ×8 |
-| Q/E, rueda | girar cámara 45°, zoom |
-| V / T / C | mapa de riesgo RNA / verdad del simulador / rutas candidatas del AG |
+| C | modo de cámara: táctica → sobre el vehículo → cabina → libre |
+| Q/E, rueda, arrastre con botón central | girar u orbitar la cámara, zoom (distancia o campo de visión), mirar alrededor |
+| W/A/S/D o flechas, RePág/AvPág, Mayús | cámara libre: mover, subir/bajar, acelerar |
+| V / T / B | mapa de riesgo RNA / verdad del simulador / rutas candidatas del AG |
 | P | forzar replanificación del AG |
 | F1…F11 | sismo, tormenta, meteorito, fallo de sensor (Mayús+F4 repara), noche, enlace, ráfaga, biofirma, alien (ficción), batería 12 %, remoción (Tierra) |
 | D | desplegar el dron (a la celda bajo el cursor o al tramo más incierto) · en vuelo: ordenar regreso |

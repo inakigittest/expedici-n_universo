@@ -18,6 +18,7 @@ public partial class VehicleCard : Control
     public Vector3 WorldPos;            // punto del vehículo (la ficha va encima)
     public float LiftUnits = 3.5f;      // altura sobre el punto (unidades de mundo)
     public Rect2 Area = new(0, 0, 1280, 720);
+    public float OffsetX = 28;          // separación lateral (en la cámara de persecución se aparta del vehículo)
     private Vector2 _pos;
     private bool _placed;
     private const float W = 176;
@@ -38,7 +39,7 @@ public partial class VehicleCard : Control
         if (cam.IsPositionBehind(world)) return;
         Vector2 sp = cam.UnprojectPosition(world);
         // encima del vehículo, con una pequeña separación; dentro del área central
-        var goal = sp + new Vector2(28, -Size.Y - 18);
+        var goal = sp + new Vector2(OffsetX, -Size.Y - 18);
         goal.X = Mathf.Clamp(goal.X, Area.Position.X + 4, Area.End.X - Size.X - 4);
         goal.Y = Mathf.Clamp(goal.Y, Area.Position.Y + 76, Area.End.Y - Size.Y - 8);
         _pos = _placed ? _pos.Lerp(goal, 1 - MathF.Exp(-10f * (float)delta)) : goal;

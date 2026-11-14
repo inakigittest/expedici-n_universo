@@ -30,6 +30,8 @@ public interface IGameHost
     string CycleTool();
     void RotateCam(int dir);
     void ZoomCam(int step);
+    void CycleCamera();
+    string CameraName { get; }
     void ToggleWindow(string id);
     void DroneAction();
     void ToggleDroneAuto();
@@ -105,6 +107,10 @@ public partial class Hud : CanvasLayer
         _root = new Control { Theme = UiTheme.Get(), MouseFilter = Control.MouseFilterEnum.Ignore };
         _root.SetAnchorsPreset(Control.LayoutPreset.FullRect);
         AddChild(_root);
+        // HUD táctico de cabina / persecución (debajo de todas las ventanas)
+        Cockpit = new CockpitHud { Visible = false };
+        _root.AddChild(Cockpit);
+        Cockpit.SetAnchorsPreset(Control.LayoutPreset.FullRect);
 
         _top = new TopBar { MouseFilter = Control.MouseFilterEnum.Ignore };
         _root.AddChild(_top);
@@ -215,6 +221,24 @@ public partial class Hud : CanvasLayer
     private PanelContainer _pTele = null!, _pDec = null!, _pLog = null!, _pCtl = null!, _pMap = null!;
     public LiveStrip Strip = null!;
     public IaPanel Ia = null!;
+    public CockpitHud Cockpit = null!;
+    private Button? _camBtn, _camBtnM;
+
+    /// <summary>Modo de cámara: HUD de cabina, ficha del vehículo (en cabina la reemplaza el HUD) y botones.</summary>
+    public void SetCameraMode(View.CamMode mode)
+    {
+        Cockpit.Mode = mode;
+        Card.Modulate = mode == View.CamMode.Cabina ? Colors.Transparent : Colors.White;
+        Card.OffsetX = mode == View.CamMode.Sobre ? 150 : 28;
+        SetCameraName(View.CameraRig.ModeName(mode));
+    }
+
+    /// <summary>Actualiza los botones de cámara (la tecla C también cambia el modo).</summary>
+    public void SetCameraName(string name)
+    {
+        if (_camBtn != null) _camBtn.Text = "◉ Cámara: " + name;
+        if (_camBtnM != null) _camBtnM.Text = "◉ " + name;
+    }
     public VehicleCard Card = null!;
     private FloatPanel _pIa = null!;
 
@@ -305,6 +329,8 @@ public partial class Hud : CanvasLayer
         tb.AddChild(Big("✕ Cancelar destino", () => Host.CancelDestination(), 12));
         _toolBtn = Big("Toque: destino", () => _toolBtn!.Text = "Toque: " + Host.CycleTool(), 12);
         tb.AddChild(_toolBtn);
+        _camBtnM = Big("◉ Táctica", () => { Host.CycleCamera(); _camBtnM!.Text = "◉ " + Host.CameraName; }, 12);
+        tb.AddChild(_camBtnM);
         var rot = new HBoxContainer();
         rot.AddChild(Big("⟲", () => Host.RotateCam(-1), 16));
         rot.AddChild(Big("⟳", () => Host.RotateCam(1), 16));
@@ -505,6 +531,8 @@ public partial class Hud : CanvasLayer
         g2.AddChild(cam);
         B(cam, "⟲", () => Host.RotateCam(-1), "Girar cámara (Q)");
         B(cam, "⟳", () => Host.RotateCam(1), "Girar cámara (E)");
+        _camBtn = B(v, "◉ Cámara: Táctica", () => { Host.CycleCamera(); _camBtn!.Text = "◉ Cámara: " + Host.CameraName; },
+            "Cámara (C): táctica · sobre el vehículo · cabina · libre");
 
         Header("EVENTOS");
         var ge = Grid(2);
@@ -577,6 +605,7 @@ public partial class Hud : CanvasLayer
         Strip.Mission = m;
         Ia.Mission = m;
         Card.Mission = m;
+        Cockpit.Mission = m;
         Map.Mission = m;
         Sparks.Mission = m;
         Sparks.Clear();

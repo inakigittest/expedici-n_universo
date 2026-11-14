@@ -13,6 +13,9 @@ namespace AresX.View;
 /// </summary>
 public partial class CityView : Node3D
 {
+    /// <summary>Corte de edificios alrededor del vehículo (cámara táctica y de persecución; en cabina y libre no).</summary>
+    public static bool CutawayOn = true;
+
     public Mission? Mission;
     public Func<Vector3>? Focus;          // posición del vehículo (recorte transparente)
     private const int Chunk = 32;
@@ -158,7 +161,7 @@ public partial class CityView : Node3D
         if (Focus != null)
         {
             _mat.SetShaderParameter("player_pos", Focus());
-            _mat.SetShaderParameter("cutaway_radius", 7.5f);
+            _mat.SetShaderParameter("cutaway_radius", CutawayOn ? 7.5f : 0f);
         }
         float night = Mathf.Clamp(0.35f - m.Env.SunElev * 3f, 0, 1);
         if (!m.Env.IsDay || m.Env.ForcedNight) night = 1;

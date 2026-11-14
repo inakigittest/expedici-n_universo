@@ -15,6 +15,9 @@ public partial class RescueView : Node3D
     public Mission? Mission;
     private readonly Dictionary<int, (PilotActor Actor, Label3D Label, MeshInstance3D Beacon, float HideAt)> _victims = new();
     private float _t;
+    /// <summary>Personas cuyo actor controla la tripulación (rescate o entrega en curso o terminada).</summary>
+    public readonly HashSet<int> Managed = new();
+    public PilotActor? Actor(int id) => _victims.TryGetValue(id, out var e) ? e.Actor : null;
 
     public override void _Ready()
     {
@@ -30,7 +33,10 @@ public partial class RescueView : Node3D
             var c = Grid.CellCenter(v.Cell);
             var actor = new PilotActor { Paint = v.Kind switch { VictimKind.Montana => "orbital", VictimKind.Inundacion => "nova", VictimKind.Aluvion => "vulkan", _ => "aegis" } };
             AddChild(actor);
-            actor.GlobalPosition = new Vector3(c.X, Grid.HeightAt(c.X, c.Z), c.Z);
+            // a un costado del centro de la celda (ahí aterriza el helicóptero): la tripulación camina hasta la persona
+            float ang = v.Id * 2.4f;
+            var at = c + new Vector3(MathF.Cos(ang), 0, MathF.Sin(ang)) * 1.9f;
+            actor.GlobalPosition = new Vector3(at.X, Grid.HeightAt(at.X, at.Z), at.Z);
             actor.Rig.Play("down");
             var beacon = new MeshInstance3D
             {
@@ -77,9 +83,9 @@ public partial class RescueView : Node3D
             bool gone = v.OnBoard || v.Delivered;
             if (gone && e.HideAt < 0) _victims[v.Id] = e = (e.Actor, e.Label, e.Beacon, _t + 1.2f);   // la tripulación llega primero
             bool hidden = gone && _t >= e.HideAt;
-            e.Actor.Visible = !hidden;
-            e.Beacon.Visible = !hidden && !v.Lost && !v.Unreachable;
-            e.Label.Visible = !hidden;
+            if (!Managed.Contains(v.Id)) e.Actor.Visible = !hidden;
+            e.Beacon.Visible = !gone && !v.Lost && !v.Unreachable;
+            e.Label.Visible = !gone;
             float pct = v.SurvivalMaxS > 0 ? v.SurvivalS / v.SurvivalMaxS : 0;
             e.Label.Text = v.Lost ? $"{v.Name} · sin vida" : v.Unreachable ? $"{v.Name} · inalcanzable" : $"{v.Name} · {v.SurvivalS / 60:0} min";
             e.Label.Modulate = v.Lost || v.Unreachable ? new Color(0.6f, 0.62f, 0.66f) : pct < 0.3f ? new Color("ff5a4a") : pct < 0.6f ? new Color("ffb347") : new Color("8cff9a");

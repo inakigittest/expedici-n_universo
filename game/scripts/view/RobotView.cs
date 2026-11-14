@@ -33,6 +33,33 @@ public partial class RobotView : Node3D
     private Node3D? _heli, _rotor, _tailRotor;
     private float _heliAlt;
     public bool Busy => _moveT < _moveDur;
+    public Vector3 Facing => _facing;
+    /// <summary>Cámara de cabina: el sprite del rover se oculta (el helicóptero se ve desde dentro, con las caras interiores descartadas).</summary>
+    public bool Cockpit
+    {
+        set
+        {
+            if (_heli == null && Rig != null) Rig.Visible = !value;
+            // en cabina las palas cruzarían la vista: queda solo el disco translúcido del rotor
+            if (_rotor != null) foreach (var c in _rotor.GetChildren()) if (c is MeshInstance3D { Mesh: BoxMesh } mi) mi.Visible = !value;
+        }
+    }
+    /// <summary>Centro visual del cuerpo (el helicóptero incluye su altura de vuelo).</summary>
+    public Vector3 BodyPosition => _heli != null ? _heli.GlobalPosition + Vector3.Up * 0.9f : GlobalPosition + Vector3.Up * 1.2f;
+    /// <summary>Punto de vista de la cabina (−Z hacia adelante): tras el parabrisas del helicóptero o sobre el mástil del rover.</summary>
+    public Transform3D EyeTransform
+    {
+        get
+        {
+            if (_heli != null)
+            {
+                var t = _heli.GlobalTransform;
+                var fwd = (t.Basis * Vector3.Right).Normalized();
+                return new Transform3D(Basis.LookingAt(fwd, Vector3.Up), t * new Vector3(0.62f, 1.12f, 0));
+            }
+            return new Transform3D(Basis.LookingAt(_facing, Vector3.Up), GlobalPosition + Vector3.Up * 2.1f + _facing * 0.5f);
+        }
+    }
 
     private Vector3 _from, _to, _facing = new(1, 0, 0);
     private float _moveT = 1, _moveDur = 0;
@@ -217,45 +244,69 @@ public partial class RobotView : Node3D
     }
 }
 
+public enum CamMode { Tactica, Sobre, Cabina, Libre }
+
 /// <summary>
-/// Cámara ortográfica 3/4 (la del proyecto de mechas, adaptada): el pitch y la escala salen del set de sprites. Todo es
-/// continuo y suavizado:
-///   * giro: Q/E mantenidos (acelera y frena con inercia), arrastrar con el botón central, o los botones ⟲⟳ (45°);
-///     los sprites eligen su dirección respecto a la cámara en cada frame;
-///   * zoom: la rueda multiplica el zoom objetivo (×1,15 por paso) y el encuadre se acerca a él con suavidad;
-///   * seguimiento: muelle críticamente amortiguado (sin tirones);
-///   * sacudida: trauma (0..1) que crece con el cuadrado y se apaga solo.
-/// Usa el tiempo real. En mapas a escala real la cámara se aleja y el zoom llega mucho más lejos.
+/// Cámara con cuatro modos (C cicla):
+///   * TÁCTICA: ortográfica 3/4 (la del proyecto de mechas): Q/E o arrastre central giran con inercia, ⟲⟳ a 45°, la rueda
+///     multiplica el zoom (×1,15 por paso); seguimiento con muelle críticamente amortiguado.
+///   * SOBRE EL VEHÍCULO: perspectiva de persecución, detrás y por encima siguiendo el rumbo; arrastre central/Q/E orbitan,
+///     la rueda acerca o aleja (arrastrar hacia abajo llega a la vista cenital).
+///   * CABINA: primera persona tras el parabrisas (o sobre el mástil del rover); arrastre central/Q/E miran alrededor y la
+///     rueda cambia el campo de visión. El HUD de cabina dibuja rumbo, altura, velocidad y la decisión de la IA.
+///   * LIBRE: vuelo libre: W/A/S/D o flechas mueven, rueda o RePág/AvPág suben y bajan, Mayús acelera, arrastre central mira.
+/// La sacudida (trauma 0..1) funciona en todos los modos. Usa el tiempo real.
 /// </summary>
 public partial class CameraRig : Node3D
 {
     public Node3D? Target;
+    public RobotView? Vehicle;
     public float Zoom = 2.5f;
     public Camera3D Camera { get; private set; } = null!;
     public float MaxZoom = 7f, MinZoom = 0.8f;
     public float FollowTime = 0.16f, LookHeight = 1.2f, YawSpeed = 110f;
+    public CamMode Mode { get; private set; } = CamMode.Tactica;
+    public static event Action<CamMode>? ModeChanged;
     private const float ZoomStep = 1.15f, DragDegPerPx = 0.35f;
-    private float _yawDeg, _yawVel, _zoomTarget = 2.5f, _trauma, _shakeT, _baseSize, _distance = 45f;
+    private float _yawDeg, _yawVel, _zoomTarget = 2.5f, _trauma, _shakeT, _baseSize, _distance = 45f, _pitchDeg = 30f;
     private float? _snapTo;
     private Vector3 _vel;
     private ulong _lastUsec;
     private readonly FastNoiseLite _noise = new() { NoiseType = FastNoiseLite.NoiseTypeEnum.Simplex, Frequency = 1f };
+    // modos en perspectiva
+    private float _lookYaw, _lookPitch, _lookYawVel;   // desvío de la mirada (sobre / cabina) en grados
+    private float _chaseDist = 16f, _fov = 70f;
+    private Vector3 _camPos, _camVel, _freePos;
+    private float _freeYaw, _freePitch = -18f;
+    private Basis _eyeBasis = Basis.Identity;
+    private bool _fresh = true;
+
+    public static string ModeName(CamMode m) => m switch
+    {
+        CamMode.Sobre => "Sobre el vehículo", CamMode.Cabina => "Cabina", CamMode.Libre => "Libre", _ => "Táctica",
+    };
 
     /// <summary>Mapas a escala real (km): cámara más lejos (el relieve puede superar los 100 m de altura de mundo) y más zoom.</summary>
     public void ConfigureForLarge(bool large)
     {
         _distance = large ? 420f : 45f;
         MaxZoom = large ? 48f : 7f;
-        float p = Mathf.DegToRad(MechSkeletonData.Get().Pitch);
-        Camera.Position = new Vector3(0, Mathf.Sin(p), Mathf.Cos(p)) * _distance;
-        Camera.Far = large ? 2400f : 300f;
+        _chaseDist = large ? 9f : 8f;
+        if (Mode == CamMode.Tactica)
+        {
+            Camera.Position = OrthoOffset;
+            Camera.Far = large ? 2400f : 300f;
+        }
         EnvironmentFx.FogScale = 45f / _distance;
         Zoom = _zoomTarget = Mathf.Min(Zoom, MaxZoom);
     }
 
+    private Vector3 OrthoOffset => new Vector3(0, Mathf.Sin(Mathf.DegToRad(_pitchDeg)), Mathf.Cos(Mathf.DegToRad(_pitchDeg))) * _distance;
+
     public override void _Ready()
     {
         var skel = MechSkeletonData.Get();
+        _pitchDeg = skel.Pitch;
         float p = Mathf.DegToRad(skel.Pitch);
         int vh = ProjectSettings.GetSetting("display/window/size/viewport_height").AsInt32();
         _baseSize = vh * skel.PixelSize;
@@ -263,12 +314,56 @@ public partial class CameraRig : Node3D
         Camera = new Camera3D
         {
             Projection = Camera3D.ProjectionType.Orthogonal, Size = _baseSize * Zoom, Near = 0.5f, Far = 300f,
-            Position = new Vector3(0, Mathf.Sin(p), Mathf.Cos(p)) * _distance, Rotation = new Vector3(-p, 0, 0),
+            Position = OrthoOffset, Rotation = new Vector3(-p, 0, 0),
         };
         AddChild(Camera);
         Camera.MakeCurrent();
         _lastUsec = Time.GetTicksUsec();
     }
+
+    // ------------------------------------------------------------------ modos
+    public void SetMode(CamMode m)
+    {
+        if (Camera == null) return;
+        var prev = Camera.GlobalTransform;
+        Mode = m;
+        _lookYaw = _lookPitch = _lookYawVel = 0;
+        _fresh = true;
+        bool large = Grid.Map != null && Grid.Large;
+        if (m == CamMode.Tactica)
+        {
+            Camera.TopLevel = false;
+            Camera.Projection = Camera3D.ProjectionType.Orthogonal;
+            Camera.Position = OrthoOffset;
+            Camera.Rotation = new Vector3(-Mathf.DegToRad(_pitchDeg), 0, 0);
+            Camera.Near = 0.5f;
+            Camera.Far = large ? 2400f : 300f;
+        }
+        else
+        {
+            Camera.TopLevel = true;
+            Camera.GlobalTransform = prev;
+            Camera.Projection = Camera3D.ProjectionType.Perspective;
+            _fov = m == CamMode.Cabina ? 72f : 58f;
+            Camera.Fov = _fov;
+            Camera.Near = m == CamMode.Cabina ? 0.05f : 0.15f;
+            Camera.Far = large ? 3200f : 700f;
+            if (m == CamMode.Libre)
+            {
+                // arranca detrás y por encima del vehículo, mirándolo
+                var focus = Vehicle?.BodyPosition ?? GlobalPosition;
+                var back = new Vector3(Mathf.Sin(Mathf.DegToRad(_yawDeg)), 0, Mathf.Cos(Mathf.DegToRad(_yawDeg)));
+                _freePos = focus + back * _chaseDist * 1.4f + Vector3.Up * _chaseDist * 0.8f;
+                var dir = (focus - _freePos).Normalized();
+                _freeYaw = Mathf.RadToDeg(Mathf.Atan2(-dir.X, -dir.Z));
+                _freePitch = Mathf.RadToDeg(Mathf.Asin(dir.Y));
+            }
+        }
+        if (Vehicle != null) Vehicle.Cockpit = m == CamMode.Cabina;
+        ModeChanged?.Invoke(m);
+    }
+
+    public void CycleMode() => SetMode((CamMode)(((int)Mode + 1) % 4));
 
     public override void _Process(double delta)
     {
@@ -276,15 +371,91 @@ public partial class CameraRig : Node3D
         float dt = Mathf.Min((now - _lastUsec) / 1e6f, 0.1f);
         _lastUsec = now;
         if (dt <= 0) return;
-        UpdateYaw(dt);
-        Zoom = Mathf.Lerp(Zoom, _zoomTarget, 1f - Mathf.Exp(-12f * dt));
-        Camera.Size = _baseSize * Zoom;
+        if (Mode == CamMode.Tactica)
+        {
+            UpdateYaw(dt);
+            Zoom = Mathf.Lerp(Zoom, _zoomTarget, 1f - Mathf.Exp(-12f * dt));
+            Camera.Size = _baseSize * Zoom;
+        }
         if (Target != null)
             GlobalPosition = SmoothDamp(GlobalPosition, Target.GlobalPosition + Vector3.Up * LookHeight, ref _vel, FollowTime, dt);
+        switch (Mode)
+        {
+            case CamMode.Sobre: UpdateChase(dt); break;
+            case CamMode.Cabina: UpdateCockpit(dt); break;
+            case CamMode.Libre: UpdateFree(dt); break;
+        }
         UpdateShake(dt);
     }
 
-    // ------------------------------------------------------------------ giro
+    private float LookInput(float dt)
+    {
+        float input = (Input.IsActionPressed("cam_right") ? 1f : 0f) - (Input.IsActionPressed("cam_left") ? 1f : 0f);
+        _lookYawVel = input != 0 ? Mathf.MoveToward(_lookYawVel, input * YawSpeed, YawSpeed * 5f * dt) : Mathf.MoveToward(_lookYawVel, 0, YawSpeed * 6f * dt);
+        return _lookYawVel * dt;
+    }
+
+    private static float HeadingYaw(Vector3 f) => Mathf.Atan2(-f.X, -f.Z);   // yaw de Godot que mira hacia f
+
+    private void UpdateChase(float dt)
+    {
+        if (Vehicle == null) return;
+        _lookYaw -= LookInput(dt);
+        var body = Vehicle.BodyPosition;
+        float yaw = HeadingYaw(Vehicle.Facing) + Mathf.DegToRad(_lookYaw);
+        float elev = Mathf.DegToRad(Mathf.Clamp(24f + _lookPitch, 4f, 88f));
+        var back = new Vector3(Mathf.Sin(yaw), 0, Mathf.Cos(yaw));
+        var goal = body + back * _chaseDist * Mathf.Cos(elev) + Vector3.Up * (_chaseDist * Mathf.Sin(elev) + 1.2f);
+        if (Grid.Map != null) goal.Y = Mathf.Max(goal.Y, Grid.HeightAt(goal.X, goal.Z) + 1.0f);
+        if (_fresh) { _camPos = goal; _camVel = Vector3.Zero; _fresh = false; }
+        _camPos = SmoothDamp(_camPos, goal, ref _camVel, 0.45f, dt);
+        var look = body + Vector3.Up * 0.6f - back * 2f;
+        Camera.GlobalTransform = new Transform3D(Basis.Identity, _camPos).LookingAt(look, Vector3.Up);
+        Camera.Fov = Mathf.Lerp(Camera.Fov, _fov, 1 - Mathf.Exp(-10f * dt));
+    }
+
+    private void UpdateCockpit(float dt)
+    {
+        if (Vehicle == null) return;
+        _lookYaw -= LookInput(dt);
+        var eye = Vehicle.EyeTransform;
+        // el rumbo del vehículo cambia por celdas: la mirada lo sigue con suavidad
+        _eyeBasis = _fresh ? eye.Basis : new Basis(_eyeBasis.GetRotationQuaternion().Slerp(eye.Basis.GetRotationQuaternion(), 1 - Mathf.Exp(-5f * dt)));
+        _fresh = false;
+        var look = new Basis(Vector3.Up, Mathf.DegToRad(_lookYaw)) * new Basis(Vector3.Right, Mathf.DegToRad(Mathf.Clamp(-8f + _lookPitch, -75f, 60f)));
+        Camera.GlobalTransform = new Transform3D(_eyeBasis * look, eye.Origin);
+        Camera.Fov = Mathf.Lerp(Camera.Fov, _fov, 1 - Mathf.Exp(-10f * dt));
+    }
+
+    private void UpdateFree(float dt)
+    {
+        _freeYaw -= LookInput(dt);
+        float fwd = 0, side = 0, up = 0;
+        if (Input.IsPhysicalKeyPressed(Key.W) || Input.IsPhysicalKeyPressed(Key.Up)) fwd += 1;
+        if (Input.IsPhysicalKeyPressed(Key.S) || Input.IsPhysicalKeyPressed(Key.Down)) fwd -= 1;
+        if (Input.IsPhysicalKeyPressed(Key.D) || Input.IsPhysicalKeyPressed(Key.Right)) side += 1;
+        if (Input.IsPhysicalKeyPressed(Key.A) || Input.IsPhysicalKeyPressed(Key.Left)) side -= 1;
+        if (Input.IsPhysicalKeyPressed(Key.Pageup)) up += 1;
+        if (Input.IsPhysicalKeyPressed(Key.Pagedown)) up -= 1;
+        float ground = Grid.Map != null ? Grid.HeightAt(_freePos.X, _freePos.Z) : 0;
+        float agl = Mathf.Max(1, _freePos.Y - ground);
+        float speed = Mathf.Clamp(agl * 1.2f, 6f, Grid.Map != null && Grid.Large ? 400f : 80f) * (Input.IsPhysicalKeyPressed(Key.Shift) ? 4f : 1f);
+        float y = Mathf.DegToRad(_freeYaw);
+        var f = new Vector3(-Mathf.Sin(y), 0, -Mathf.Cos(y));
+        var r = new Vector3(Mathf.Cos(y), 0, -Mathf.Sin(y));
+        _freePos += (f * fwd + r * side + Vector3.Up * up) * speed * dt;
+        if (Grid.Map != null)
+        {
+            float lim = Grid.Half * 1.3f;
+            _freePos.X = Mathf.Clamp(_freePos.X, -lim, lim);
+            _freePos.Z = Mathf.Clamp(_freePos.Z, -lim, lim);
+            _freePos.Y = Mathf.Max(_freePos.Y, Grid.HeightAt(_freePos.X, _freePos.Z) + 0.8f);
+        }
+        _freePitch = Mathf.Clamp(_freePitch, -89f, 80f);
+        Camera.GlobalTransform = new Transform3D(new Basis(Vector3.Up, y) * new Basis(Vector3.Right, Mathf.DegToRad(_freePitch)), _freePos);
+    }
+
+    // ------------------------------------------------------------------ giro (táctica)
     private void UpdateYaw(float dt)
     {
         float input = (Input.IsActionPressed("cam_right") ? 1f : 0f) - (Input.IsActionPressed("cam_left") ? 1f : 0f);
@@ -313,30 +484,75 @@ public partial class CameraRig : Node3D
     {
         if (e is InputEventMouseMotion mm && (mm.ButtonMask & MouseButtonMask.Middle) != 0)
         {
-            _snapTo = null;
-            _yawVel = 0;
-            _yawDeg -= mm.Relative.X * DragDegPerPx;
+            switch (Mode)
+            {
+                case CamMode.Tactica:
+                    _snapTo = null;
+                    _yawVel = 0;
+                    _yawDeg -= mm.Relative.X * DragDegPerPx;
+                    break;
+                case CamMode.Libre:
+                    _freeYaw -= mm.Relative.X * 0.25f;
+                    _freePitch -= mm.Relative.Y * 0.25f;
+                    break;
+                case CamMode.Sobre:
+                    _lookYaw -= mm.Relative.X * 0.3f;
+                    _lookPitch = Mathf.Clamp(_lookPitch + mm.Relative.Y * 0.25f, -20f, 64f);
+                    break;
+                default:
+                    _lookYaw -= mm.Relative.X * 0.25f;
+                    _lookPitch = Mathf.Clamp(_lookPitch - mm.Relative.Y * 0.25f, -67f, 68f);
+                    break;
+            }
             GetViewport().SetInputAsHandled();
         }
     }
 
-    /// <summary>Botones ⟲⟳: termina el giro en el siguiente múltiplo de 45° (con muelle).</summary>
-    public void Rotate45(int sign) => _snapTo = (Mathf.Round(((_snapTo ?? _yawDeg)) / 45f) + sign) * 45f;
+    /// <summary>Botones ⟲⟳: en táctica termina el giro en el siguiente múltiplo de 45° (con muelle); en los demás modos gira la mirada 45°.</summary>
+    public void Rotate45(int sign)
+    {
+        if (Mode == CamMode.Tactica) _snapTo = (Mathf.Round(((_snapTo ?? _yawDeg)) / 45f) + sign) * 45f;
+        else if (Mode == CamMode.Libre) _freeYaw -= 45f * sign;
+        else _lookYaw -= 45f * sign;
+    }
 
     // ------------------------------------------------------------------ zoom
-    /// <summary>Rueda: ×1,15 por paso (se alcanza con suavidad).</summary>
-    public void Wheel(int step, float factor = 1f) =>
-        _zoomTarget = Mathf.Clamp(_zoomTarget * Mathf.Pow(ZoomStep, step * factor), MinZoom, MaxZoom);
+    /// <summary>Rueda: táctica ×1,15 de zoom por paso; sobre el vehículo, distancia; cabina, campo de visión; libre, altura.</summary>
+    public void Wheel(int step, float factor = 1f)
+    {
+        switch (Mode)
+        {
+            case CamMode.Sobre:
+                _chaseDist = Mathf.Clamp(_chaseDist * Mathf.Pow(ZoomStep, step * factor), 5f, Grid.Map != null && Grid.Large ? 240f : 70f);
+                break;
+            case CamMode.Cabina:
+                _fov = Mathf.Clamp(_fov + 5f * step * factor, 30f, 95f);
+                break;
+            case CamMode.Libre:
+                float agl = Mathf.Max(2f, _freePos.Y - (Grid.Map != null ? Grid.HeightAt(_freePos.X, _freePos.Z) : 0));
+                _freePos.Y += step * factor * agl * 0.15f;
+                break;
+            default:
+                _zoomTarget = Mathf.Clamp(_zoomTarget * Mathf.Pow(ZoomStep, step * factor), MinZoom, MaxZoom);
+                break;
+        }
+    }
 
     /// <summary>Zoom continuo (pellizco en pantallas táctiles).</summary>
-    public void ZoomBy(float factor) => _zoomTarget = Mathf.Clamp(_zoomTarget * factor, MinZoom, MaxZoom);
+    public void ZoomBy(float factor)
+    {
+        if (Mode == CamMode.Sobre) _chaseDist = Mathf.Clamp(_chaseDist * factor, 5f, Grid.Map != null && Grid.Large ? 240f : 70f);
+        else if (Mode == CamMode.Cabina) _fov = Mathf.Clamp(_fov * factor, 30f, 95f);
+        else _zoomTarget = Mathf.Clamp(_zoomTarget * factor, MinZoom, MaxZoom);
+    }
 
     public void Snap()
     {
         _zoomTarget = Zoom;
         if (Target != null) GlobalPosition = Target.GlobalPosition + Vector3.Up * LookHeight;
         _vel = Vector3.Zero;
-        if (Camera != null) Camera.Size = _baseSize * Zoom;
+        _fresh = true;
+        if (Camera != null && Mode == CamMode.Tactica) Camera.Size = _baseSize * Zoom;
     }
 
     // ------------------------------------------------------------------ seguimiento
@@ -360,7 +576,7 @@ public partial class CameraRig : Node3D
     {
         _trauma = Mathf.Max(0, _trauma - 1.4f * dt);
         _shakeT += dt * 22f;
-        float s = _trauma * _trauma * Camera.Size * 0.025f;
+        float s = _trauma * _trauma * (Mode == CamMode.Tactica ? Camera.Size * 0.025f : Mode == CamMode.Cabina ? 0.06f : 0.4f);
         Camera.HOffset = s * _noise.GetNoise2D(_shakeT, 0.5f);
         Camera.VOffset = s * _noise.GetNoise2D(0.5f, _shakeT);
     }

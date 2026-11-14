@@ -148,9 +148,14 @@ public partial class Main : Node3D, IGameHost
         _worldRoot.AddChild(_overlay);
         _worldRoot.AddChild(_robot);
         _worldRoot.AddChild(new DroneView { Name = "Drone", Mission = _mission, Rover = _robot });
-        _crew = new CrewView { Name = "Crew", Mission = _mission };
+        _crew = new CrewView { Name = "Crew", Mission = _mission, Vehicle = _robot };
         _worldRoot.AddChild(_crew);
-        if (_mission.Rescue) _worldRoot.AddChild(new RescueView { Name = "Rescue", Mission = _mission });
+        if (_mission.Rescue)
+        {
+            var rescueView = new RescueView { Name = "Rescue", Mission = _mission };
+            _worldRoot.AddChild(rescueView);
+            _crew.Rescue = rescueView;
+        }
         if (_mission.Map.City is { Buildings.Count: > 0 })
         {
             var rv = _robot;
@@ -159,7 +164,10 @@ public partial class Main : Node3D, IGameHost
         _overlay.Reset();
         _robot.Place(_mission.Rover.Pos);
         _cam.Target = _robot;
+        _cam.Vehicle = _robot;
         _cam.ConfigureForLarge(Grid.Large);
+        _cam.SetMode(_cam.Mode);
+        _hud.SetCameraMode(_cam.Mode);
         _cam.Zoom = Grid.Large ? 3f : 1.5f;
         _cam.Snap();
         _fx.Setup(_mission.Env, _mission.Planet);
@@ -187,6 +195,8 @@ public partial class Main : Node3D, IGameHost
         if (_mission == null || _robot == null || _mission.Finished) return;
         var before = _mission.Rover.Pos;
         int logBefore = _mission.Log.Count;
+        var wasOnBoard = _mission.Victims.Where(v => v.OnBoard).Select(v => v.Id).ToHashSet();
+        var wasDelivered = _mission.Victims.Where(v => v.Delivered).Select(v => v.Id).ToHashSet();
         _mission.Step();
         var d = _mission.LastDecision;
         if (_mission.Rover.Pos != before)
@@ -200,13 +210,14 @@ public partial class Main : Node3D, IGameHost
         {
             _robot.Face(f - _mission.Rover.Pos);
         }
-        if (d?.Action == RoverAction.Muestrear && _crew != null)
+        if (_crew != null)
         {
-            // la tripulación baja, analiza junto al vehículo y vuelve a subir
-            var dir = new Vector3(_mission.Rover.Dir.X, 0, _mission.Rover.Dir.Y);
-            if (dir.LengthSquared() < 0.1f) dir = new Vector3(0, 0, 1);
-            var from = _robot.GlobalPosition;
-            _crew.StartSample(from, from + dir.Normalized() * 1.8f + new Vector3(0.6f, 0, 0), 2.8f / MathF.Sqrt(MathF.Max(1, SimSpeed)));
+            // la tripulación sale (muestra, rescate o entrega) y el vehículo espera a que el piloto vuelva a subir
+            var picked = _mission.Victims.Where(v => v.OnBoard && !wasOnBoard.Contains(v.Id)).ToList();
+            var dropped = _mission.Victims.Where(v => v.Delivered && !wasDelivered.Contains(v.Id)).ToList();
+            if (picked.Count > 0) _crew.StartPickup(picked, SimSpeed);
+            else if (dropped.Count > 0) _crew.StartDelivery(dropped, SimSpeed);
+            else if (d?.Action == RoverAction.Muestrear && !_mission.Rescue) _crew.StartSample(SimSpeed);
         }
         if (d != null && (d.Veto || _mission.LastCollision)) _robot.Hit();
         if (_mission.LastCollision) _cam.Shake(0.3f, 0.3f);
@@ -245,7 +256,8 @@ public partial class Main : Node3D, IGameHost
 
         if (!OS.HasFeature("mobile")) UpdateHover();
         if (Platform.IsMobile) UpdateTouch();
-        if (!_robot.Busy && !_mission.Finished)
+        bool crewOut = _crew?.Busy == true;
+        if (!_robot.Busy && !crewOut && !_mission.Finished)
         {
             if (Running)
             {
@@ -260,11 +272,11 @@ public partial class Main : Node3D, IGameHost
                 }
             }
         }
-        if (_autoSteps > 0 && !_robot.Busy && !_mission.Finished)
+        if (_autoSteps > 0 && !_robot.Busy && !crewOut && !_mission.Finished)
         {
             _autoSteps--;
             DoStep();
-            if (_autoSteps == 0) _shotWait = 30;
+            if (_autoSteps == 0) _shotWait = _args.FirstOrDefault(x => x.StartsWith("--shot-wait="))?[12..].ToInt() ?? 30;
         }
         HandleShot();
     }
@@ -487,6 +499,24 @@ public partial class Main : Node3D, IGameHost
     }
 
     public void RotateCam(int dir) => _cam.Rotate45(dir);
+
+    /// <summary>Cicla la cámara: táctica → sobre el vehículo → cabina → libre (en el teléfono se omite la libre: no hay teclado).</summary>
+    public void CycleCamera()
+    {
+        _cam.CycleMode();
+        if (Platform.IsMobile && _cam.Mode == CamMode.Libre) _cam.CycleMode();
+        CityView.CutawayOn = _cam.Mode is CamMode.Tactica or CamMode.Sobre;
+        _hud.SetCameraMode(_cam.Mode);
+        _hud.Flash($"Cámara: {CameraRig.ModeName(_cam.Mode)}" + _cam.Mode switch
+        {
+            CamMode.Sobre => " · arrastre con botón central para orbitar, rueda para alejar",
+            CamMode.Cabina => " · arrastre con botón central para mirar, rueda para el campo de visión",
+            CamMode.Libre => " · W/A/S/D o flechas, rueda o RePág/AvPág para subir, Mayús acelera",
+            _ => "",
+        }, UiTheme.Accent, 4);
+    }
+
+    public string CameraName => CameraRig.ModeName(_cam.Mode);
     public void ZoomCam(int step) => _cam.Wheel(step);
 
     private static double Now => Time.GetTicksMsec() / 1000.0;
@@ -603,6 +633,7 @@ public partial class Main : Node3D, IGameHost
             GetViewport().SetInputAsHandled();
             return;
         }
+        if (_cam.Mode == CamMode.Libre && k.PhysicalKeycode is Key.W or Key.A or Key.S or Key.D) return;   // vuelo libre
         switch (k.PhysicalKeycode)
         {
             case Key.Space: TogglePlay(); break;
@@ -613,7 +644,8 @@ public partial class Main : Node3D, IGameHost
             case Key.P: Replan(); break;
             case Key.V: ToggleRisk(); break;
             case Key.T: ToggleTruth(); break;
-            case Key.C:
+            case Key.C: CycleCamera(); break;
+            case Key.B:
                 _showCand = !_showCand;
                 if (_overlay != null) _overlay.ShowCandidates = _showCand;
                 break;
@@ -674,7 +706,11 @@ public partial class Main : Node3D, IGameHost
                 Callable.From(() => { _hud.InitLayout(); WindowManager.ApplyPreset(preset, _hud.UiSize); _hud.RefreshWindowButtons(); }).CallDeferred();
             }
         foreach (var a in _args)
+        {
             if (a.StartsWith("--zoom=")) { _cam.Zoom = a[7..].ToFloat(); _cam.Snap(); }
+            if (a.StartsWith("--cam="))
+                for (int i = 0; i < 4 && CameraRig.ModeName(_cam.Mode).ToLowerInvariant().Replace("á", "a") is var n && !n.StartsWith(a[6..]); i++) CycleCamera();
+        }
         SimSpeed = 8;
         if (_autoSteps == 0) _shotWait = 40;
     }
